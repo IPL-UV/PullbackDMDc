@@ -3,7 +3,7 @@
 import numpy as np
 
 
-def simulate_lti(A, B, U, x0, noise_std, rng):
+def simulate_lti(A, B, U, x0, noise_std, rng=None):
     """Simulate x_{t+1} = A x_t + B u_t + noise for t = 0..T-1.
 
     Parameters
@@ -13,7 +13,7 @@ def simulate_lti(A, B, U, x0, noise_std, rng):
     U : (m, T) array of control inputs u_0..u_{T-1}
     x0 : (n,) array, initial condition
     noise_std : float, std of iid Gaussian process noise added at each step
-    rng : np.random.Generator
+    rng : np.random.Generator, only needed when noise_std is nonzero
 
     Returns
     -------
@@ -24,8 +24,9 @@ def simulate_lti(A, B, U, x0, noise_std, rng):
     X = np.empty((n, T + 1))
     X[:, 0] = x0
     for t in range(T):
-        noise = noise_std * rng.standard_normal(n)
-        X[:, t + 1] = A @ X[:, t] + B @ U[:, t] + noise
+        X[:, t + 1] = A @ X[:, t] + B @ U[:, t]
+        if noise_std:
+            X[:, t + 1] += noise_std * rng.standard_normal(n)
     return X
 
 
@@ -55,6 +56,35 @@ def simulate_dataset(A, B, controls, noise_std, rng):
         x0 = rng.standard_normal(n)
         trajectories.append(simulate_lti(A, B, U, x0, noise_std, rng))
     return trajectories
+
+
+def forced_response(A, B, U):
+    """Control-driven part of the trajectory: the same recursion from rest, with no noise.
+
+    This is the component that is a function of the control input alone -- everything else
+    (initial-condition transient, process noise) is internal variability.
+    """
+    return simulate_lti(A, B, U, np.zeros(A.shape[0]), 0.0)
+
+
+def simulate_ensemble(A, B, U, n_members, noise_std, rng):
+    """Ensemble sharing one control, each member with its own initial condition and noise.
+
+    Returns
+    -------
+    forced : (n, T + 1) array, the control-driven response shared by every member
+    internal : list of (n, T + 1) arrays, each member's initial-condition transient plus its
+        noise response
+
+    The full signal for member i is forced + internal[i]. It is left unassembled so that large
+    ensembles cost n_members + 1 recursions and arrays rather than twice that.
+    """
+    zero_control = np.zeros_like(U)
+    internal = [
+        simulate_lti(A, B, zero_control, rng.standard_normal(A.shape[0]), noise_std, rng)
+        for _ in range(n_members)
+    ]
+    return forced_response(A, B, U), internal
 
 
 def add_observation_noise(trajectories, obs_noise_std, rng):

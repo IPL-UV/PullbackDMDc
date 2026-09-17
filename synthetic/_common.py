@@ -76,18 +76,5 @@ CANONICAL_A_20_PARAMS = dict(
 
 CANONICAL_B_20 = canonical_B(20)
 
-def build_modes_only_systems(n_systems, n_states, rng):
-    """n_systems sharing ONE fixed eigenvalue set (MODES_ONLY_LAMBDA_PARAMS), each rotated by its
-    own independently-drawn random orthogonal matrix -- isolates mode/eigenvector differences from
-    eigenvalue differences (the same per-system-rotation construction as synthetic_n_systems.py's
-    build_systems, but with a single shared Lambda instead of per-system eigenvalue params).
-    """
-    Lambda = canonical_A(**MODES_ONLY_LAMBDA_PARAMS)
-    As = []
-    for _ in range(n_systems):
-        Q = random_orthogonal(n_states, rng)
-        As.append(Q @ Lambda @ Q.T)
-    B = rng.standard_normal((n_states, 1))
-    return As, B
 
 
