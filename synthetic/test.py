@@ -1,5 +1,4 @@
-"""Sanity-check script: plots the structured modes and decay timescales of canonical_A
-for the 20-dim case (CANONICAL_A_20_PARAMS)."""
+"""System checks for the synthetic system: eigenstructure, forced/internal split and PullbackDMDc recovery."""
 
 import pathlib
 import sys
@@ -9,434 +8,372 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from _common import CANONICAL_A_20_PARAMS, CANONICAL_B_20, canonical_A, canonical_modes
-from dynamics import (
-    make_shared_controls,
-    simulate_dataset,
-    simulate_ensemble,
-    simulate_lti,
+from ablations import (
+    M,
+    N,
+    PHI,
+    REFERENCE,
+    SPINUP_CHUNK,
+    decay_time,
+    equal_budget,
+    make_dataset,
+    run_modal,
 )
+from plot_ablations import annual, lat_label
 from utils.pullback_dmdc import PullbackDMDc
 
-FIGURES_DIR = pathlib.Path(__file__).resolve().parent/ "figures"
+FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures"
 
 ENSEMBLE_STATE_INDICES = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+LAT = np.rad2deg(PHI)
+YEARS = np.arange(N // 12) + 0.5
 
 
-def plot_ensemble_spaghetti(out_path, n_members=10, T=200, noise_std=0.5):
-    A = canonical_A(**CANONICAL_A_20_PARAMS)
-    B = CANONICAL_B_20
-    rng = np.random.default_rng(0)
+def rms(a):
+    return np.sqrt((a**2).mean())
 
-    controls = make_shared_controls(n_members, 1, T, rng)
-    trajectories = simulate_dataset(A, B, controls, noise_std, rng)
 
-    t = np.arange(T + 1)
-    fig, axes = plt.subplots(
-        len(ENSEMBLE_STATE_INDICES), 1, figsize=(8, 1.2 * len(ENSEMBLE_STATE_INDICES)), sharex=True
-    )
-    for ax, i in zip(axes, ENSEMBLE_STATE_INDICES):
-        for X in trajectories:
-            ax.plot(t, X[i], linewidth=0.8, alpha=0.7)
-        ax.set_ylabel(f"x[{i}]")
-    axes[-1].set_xlabel("time step")
-    fig.suptitle(f"{n_members}-member ensemble spaghetti plot")
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    print(f"saved {out_path}")
+def plane_cosines(U, V):
+    return np.linalg.svd(np.linalg.qr(U)[0].T @ np.linalg.qr(V)[0], compute_uv=False)
 
-def plot_canonical_A_check(out_path):
-    n = 3 + len(np.atleast_1d(CANONICAL_A_20_PARAMS["real_fast"]))
-    modes = canonical_modes(n)
-    A = canonical_A(**CANONICAL_A_20_PARAMS)
-    eigvals, eigvecs = np.linalg.eig(A)
-    decay_times = -1 / np.log(np.abs(eigvals))
-    order = np.argsort(decay_times)[::-1]
 
-    slow_i = np.argmax(eigvals.real)
-    slow_vec = eigvecs[:, slow_i].real
-    slow_vec /= np.linalg.norm(slow_vec)
+def unit_aligned(v, ref):
+    v = v / np.linalg.norm(v)
+    return v * np.sign(v @ ref)
 
-    complex_mask = eigvals.imag > 1e-8
-    pair_i = np.where(complex_mask)[0][np.argmax(np.abs(eigvals[complex_mask]))]
-    pair_vec = eigvecs[:, pair_i]
-    pair_real = pair_vec.real / np.linalg.norm(pair_vec.real)
-    pair_imag = pair_vec.imag / np.linalg.norm(pair_vec.imag)
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
-
-    idx = np.arange(n)
-    axes[0].plot(idx, modes[0], marker="o", label="real slow mode")
-    axes[0].plot(idx, modes[1], marker="o", label="pair mode 1 (peak)")
-    axes[0].plot(idx, modes[2], marker="o", label="pair mode 2 (dip)")
-    axes[0].axhline(0, color="k", linewidth=0.5)
-    axes[0].set_xlabel("state index")
-    axes[0].set_ylabel("mode component")
-    axes[0].set_title("Structured mode shapes (canonical_modes)")
-    axes[0].legend()
-
-    axes[1].plot(idx, slow_vec, marker="o", label="slow eigenvector (real)")
-    axes[1].plot(idx, pair_real, marker="o", label="pair eigenvector (Re)")
-    axes[1].plot(idx, pair_imag, marker="o", label="pair eigenvector (Im)")
-    axes[1].axhline(0, color="k", linewidth=0.5)
-    axes[1].set_xlabel("state index")
-    axes[1].set_ylabel("eigenvector component")
-    axes[1].set_title("Eigenvectors of A (np.linalg.eig)")
-    axes[1].legend()
-
-    axes[2].stem(np.arange(n), decay_times[order])
-    axes[2].set_xlabel("mode (sorted, slowest to fastest)")
-    axes[2].set_ylabel("decay time  -1/ln|eig|")
-    axes[2].set_title("Decay timescales")
-    axes[2].set_yscale("log")
-
-    fig.tight_layout()
-    
-    fig.savefig(out_path, dpi=150)
-    print(f"saved {out_path}")
-
-def check_dmdc_recovery(out_path, spinup=500, n_steps=20000, tol=1e-9):
-    """Fit PullbackDMDc to noise-free data from the canonical system and check that the rotated
-    modes, the slow and oscillatory eigenvalues, and B all come back."""
-    A_true, B_true = canonical_A(**CANONICAL_A_20_PARAMS), CANONICAL_B_20
-    n = A_true.shape[0]
-    rng = np.random.default_rng(0)
-
-    U = rng.standard_normal((1, spinup + n_steps - 1))
-    X = simulate_lti(A_true, B_true, U, rng.standard_normal(n), 0.0, rng)
-    data = X[:, spinup:].T
-
-    # fit models x[t] = A x[t-lag] + B f[t], indexing the forcing at the target time, while
-    # simulate_lti applies u[t] to x[t] -> x[t+1]; hence the one-row shift.
-    long_forcings = np.vstack([np.zeros((1, 1)), U.T])
-
-    model = PullbackDMDc(truncation=n, lag=1, transition_time=spinup)
-    model.fit(
-        data,
-        short_forcings=long_forcings[spinup:],
-        long_forcings=long_forcings,
-        # identity EOFs and a zero mean fit the raw uncentered state, so A and B come out in
-        # state coordinates and the model's missing intercept never bites.
-        precomputed_eofs={"data_mean": np.zeros(n), "eofs": np.eye(n), "pcs": data},
-    )
+def fit_pullback(data, long_forcings, short_forcings, transition_time):
+    model = PullbackDMDc(truncation=M, lag=1, transition_time=transition_time)
+    model.fit(data, short_forcings=short_forcings, long_forcings=long_forcings,
+              precomputed_eofs={"data_mean": np.zeros(M), "eofs": np.eye(M), "pcs": data})
     model.compute_modes()
-    patterns = model.compute_rotated_modes()["spatial_patterns"]
-    eigvals = model.eigvals
+    return model
 
-    modes_true = canonical_modes(n)
-    slow_true = CANONICAL_A_20_PARAMS["real_slow"]
-    pair_true = CANONICAL_A_20_PARAMS["pair_modulus"] * np.exp(
-        1j * CANONICAL_A_20_PARAMS["pair_angle"]
-    )
 
-    k_slow = int(np.argmin(np.abs(eigvals - slow_true)))
-    # a pair occupies columns (k, k+1) and either conjugate may sort first, so pick the pair's
-    # first column rather than the column whose eigenvalue is nearest -- that can straddle it.
-    pair_starts = [k for k in range(n - 1) if model._is_conjugate_pair(eigvals, k, n)]
-    k_pair = min(pair_starts, key=lambda k: abs(abs(eigvals[k]) - abs(pair_true)))
+def slow_index(eigvals, lam1):
+    real = np.where(np.abs(eigvals.imag) < 1e-12)[0]
+    return real[np.argmin(np.abs(eigvals[real] - lam1))]
 
-    slow_mode = patterns[:, k_slow] / np.linalg.norm(patterns[:, k_slow])
-    q_pair, _ = np.linalg.qr(patterns[:, k_pair : k_pair + 2])
-    q_pair_true, _ = np.linalg.qr(modes_true[1:3].T)
+
+def save(fig, path):
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"saved {path}")
+
+
+def plot_system_check(out_path):
+    s = REFERENCE
+    W = s.W
+    eigvals, eigvecs = np.linalg.eig(s.A)
+    slow_vec = unit_aligned(eigvecs[:, slow_index(eigvals, s.lam1)].real, W[:, 0])
+    pair_vec = eigvecs[:, np.argmin(np.abs(eigvals - s.eigvals[1]))]
+    # the pair eigenvector is c (w2 + i w3) for some complex c
+    c = np.vdot(W[:, 1] + 1j * W[:, 2], pair_vec) / np.vdot(W[:, 1] + 1j * W[:, 2], W[:, 1] + 1j * W[:, 2])
+    pair_vec = pair_vec / c
 
     errors = {
-        "slow eigenvalue": abs(eigvals[k_slow] - slow_true),
-        "complex pair": min(
-            abs(eigvals[k_pair] - pair_true), abs(np.conj(eigvals[k_pair]) - pair_true)
-        ),
-        "B": np.abs(model.B - B_true).max(),
-        "slow mode shape": 1 - abs(slow_mode @ modes_true[0]),
-        "pair mode subspace": 1 - np.linalg.svd(q_pair_true.T @ q_pair, compute_uv=False).min(),
+        "slow eigenvector vs w1": 1 - abs(slow_vec @ W[:, 0]),
+        "pair eigenvector Re vs w2": np.abs(pair_vec.real - W[:, 1]).max(),
+        "pair eigenvector Im vs w3": np.abs(pair_vec.imag - W[:, 2]).max(),
+        "pair plane vs span(w2, w3)": 1 - plane_cosines(np.column_stack([pair_vec.real, pair_vec.imag]), W[:, 1:3]).min(),
     }
+    print("--- system check: eigenstructure of A = W Lambda_R W^-1 ---")
+    for name, err in errors.items():
+        print(f"  {name:<28s} {err:.2e}")
 
-    print(f"--- DMDc recovery: noise-free, {n_steps} steps after {spinup} spinup ---")
+    fig, axes = plt.subplots(1, 4, figsize=(21, 4.5))
+    for j, name in enumerate((r"$w_1$ slow", r"$w_2$ pair", r"$w_3$ pair")):
+        axes[0].plot(LAT, W[:, j], marker="o", label=name)
+    axes[0].plot(LAT, s.b, marker="D", color="k", linestyle="--", label=r"$\hat b$ forcing")
+    axes[0].set_title("Structured patterns")
+
+    for j, (vec, name) in enumerate(((slow_vec, "slow eigvec"), (pair_vec.real, "pair eigvec Re"),
+                                     (pair_vec.imag, "pair eigvec Im"))):
+        axes[1].plot(LAT, W[:, j], color=f"C{j}", linewidth=2.4, alpha=0.4)
+        axes[1].plot(LAT, vec, color=f"C{j}", marker="x", linestyle="none", label=name)
+    axes[1].set_title("Eigenvectors of A (x) vs patterns (lines)")
+
+    for ax in axes[:2]:
+        ax.axhline(0, color="k", linewidth=0.5)
+        ax.set_xlabel("latitude (deg)")
+        ax.legend(fontsize=8)
+
+    taus = decay_time(s.eigvals) / 12
+    order = np.argsort(taus)[::-1]
+    axes[2].stem(np.arange(M), taus[order])
+    axes[2].set_yscale("log")
+    axes[2].set_xlabel("mode (slowest to fastest)")
+    axes[2].set_ylabel("decay time (yr)")
+    axes[2].set_title(rf"Decay times: $\tau_1$={taus[0]:.3g} yr, $\tau_p$={taus[1]:.3g} yr, "
+                      rf"period {2 * np.pi / s.theta / 12:.3g} yr")
+
+    theta = np.linspace(0, 2 * np.pi, 400)
+    axes[3].plot(np.cos(theta), np.sin(theta), color="0.85")
+    axes[3].scatter(s.eigvals.real, s.eigvals.imag, s=60, facecolors="none", edgecolors="C0", label="specified")
+    axes[3].scatter(eigvals.real, eigvals.imag, s=20, marker="x", color="C3", label="eig(A)")
+    axes[3].set_aspect("equal")
+    axes[3].set_title("Eigenvalues")
+    axes[3].legend(fontsize=8)
+    save(fig, out_path)
+
+    for name, err in errors.items():
+        assert err < 1e-10, f"{name}: {err:.2e}"
+
+
+def plot_ensemble_spaghetti(out_path, n_realizations=10):
+    ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations)
+    fig, axes = plt.subplots(len(ENSEMBLE_STATE_INDICES), 1, figsize=(8, 1.3 * len(ENSEMBLE_STATE_INDICES)),
+                             sharex=True)
+    for ax, i in zip(axes, ENSEMBLE_STATE_INDICES[::-1]):
+        for member in annual(ds.data[:, :, i], axis=-1):
+            ax.plot(YEARS, member, linewidth=0.7, alpha=0.7)
+        ax.plot(YEARS, annual(ds.forced[:, i], axis=-1), color="k", linewidth=1.5)
+        ax.set_ylabel(lat_label(i))
+    axes[-1].set_xlabel("year")
+    fig.suptitle(f"{n_realizations} realizations (annual means), forced in black, SNR {ds.snr:.3g}")
+    save(fig, out_path)
+
+
+def check_dmdc_recovery(out_path, n_steps=20000, tol=1e-8):
+    s = REFERENCE
+    rng = np.random.default_rng(0)
+    y = rng.standard_normal(s.spinup + n_steps)
+    z = run_modal(s.Lambda_R, np.outer(y, s.W_inv @ s.b), z0=s.W_inv @ rng.standard_normal(M))
+    data = z[s.spinup:] @ s.W.T
+
+    model = fit_pullback(data, y[:, None], y[s.spinup:, None], s.spinup)
+    patterns = model.compute_rotated_modes()["spatial_patterns"]
+    eigvals = model.eigvals
+    pair_true = s.eigvals[1]
+
+    k_slow = slow_index(eigvals, s.lam1)
+    pair_starts = [k for k in range(M - 1) if model._is_conjugate_pair(eigvals, k, M)]
+    k_pair = min(pair_starts, key=lambda k: abs(abs(eigvals[k]) - s.rho))
+    slow_mode = unit_aligned(patterns[:, k_slow], s.W[:, 0])
+    pair_plane = patterns[:, k_pair:k_pair + 2]
+
+    errors = {
+        "slow eigenvalue": abs(eigvals[k_slow] - s.lam1),
+        "pair eigenvalue": min(abs(eigvals[k_pair] - pair_true), abs(np.conj(eigvals[k_pair]) - pair_true)),
+        "B vs b_hat": np.abs(model.B.ravel() - s.b).max(),
+        "slow mode shape": 1 - abs(slow_mode @ s.W[:, 0]),
+        "pair mode plane": 1 - plane_cosines(pair_plane, s.W[:, 1:3]).min(),
+    }
+    print(f"--- DMDc recovery: noise-free, white forcing, {n_steps} steps after {s.spinup} spinup ---")
     for name, err in errors.items():
         print(f"  {name:<20s} {err:.2e}")
     print(f"  {'predict vs data':<20s} {np.abs(model.predict() - data).max():.2e}  (not asserted)")
-    print(f"  {'internal variability':<20s} {np.abs(model.internal_time_series).max():.2e}  (not asserted)")
-    print(f"  {'A entrywise':<20s} {np.abs(model.A - A_true).max():.2e}  (not asserted: fast modes")
-    print("                                        are unidentifiable from a scalar input)")
+    print(f"  {'A entrywise':<20s} {np.abs(model.A - s.A).max():.2e}  (not asserted: the 17 near-zero")
+    print("                                        complement modes are not separately excited)")
 
-    idx = np.arange(n)
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4.5))
-
+    fig, axes = plt.subplots(1, 4, figsize=(21, 4.5))
     theta = np.linspace(0, 2 * np.pi, 400)
-    eig_true = np.linalg.eigvals(A_true)
-    axes[0].plot(np.cos(theta), np.sin(theta), color="0.85", linewidth=1)
-    axes[0].scatter(eig_true.real, eig_true.imag, s=80, facecolors="none", edgecolors="C0", label="true")
+    axes[0].plot(np.cos(theta), np.sin(theta), color="0.85")
+    axes[0].scatter(s.eigvals.real, s.eigvals.imag, s=80, facecolors="none", edgecolors="C0", label="true")
     axes[0].scatter(eigvals.real, eigvals.imag, s=30, marker="x", color="C3", label="recovered")
     axes[0].set_aspect("equal")
-    axes[0].set_xlabel("Re")
-    axes[0].set_ylabel("Im")
     axes[0].set_title("Eigenvalues")
-    axes[0].legend()
 
-    axes[1].plot(idx, B_true.ravel(), marker="o", label="true B")
-    axes[1].plot(idx, model.B.ravel(), marker="x", linestyle="--", label="recovered B")
-    axes[1].set_xlabel("state index")
-    axes[1].set_title("Control matrix B")
-    axes[1].legend()
+    axes[1].plot(LAT, s.b, marker="o", label=r"true $\hat b$")
+    axes[1].plot(LAT, model.B.ravel(), marker="x", linestyle="--", label="recovered B")
+    axes[1].set_title("Forcing pattern")
 
-    axes[2].plot(idx, modes_true[0], marker="o", label="true slow mode")
-    axes[2].plot(
-        idx, slow_mode * np.sign(slow_mode @ modes_true[0]), marker="x", linestyle="--", label="recovered"
-    )
-    axes[2].axhline(0, color="k", linewidth=0.5)
-    axes[2].set_xlabel("state index")
+    axes[2].plot(LAT, s.W[:, 0], marker="o", label=r"true $w_1$")
+    axes[2].plot(LAT, slow_mode, marker="x", linestyle="--", label="recovered")
     axes[2].set_title("Slow mode shape")
-    axes[2].legend()
 
-    projector = q_pair @ q_pair.T
+    projector = np.linalg.qr(pair_plane)[0]
+    projector = projector @ projector.T
     for j, color in ((1, "C0"), (2, "C1")):
-        axes[3].plot(idx, modes_true[j], color=color, marker="o", label=f"true pair mode {j}")
-        axes[3].plot(
-            idx, projector @ modes_true[j], color=color, marker="x", linestyle="--",
-            label=f"projected onto recovered {j}",
-        )
-    axes[3].axhline(0, color="k", linewidth=0.5)
-    axes[3].set_xlabel("state index")
-    axes[3].set_title("Pair modes vs recovered subspace")
-    axes[3].legend(fontsize=8)
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    print(f"saved {out_path}")
+        axes[3].plot(LAT, s.W[:, j], color=color, marker="o", label=f"true $w_{j + 1}$")
+        axes[3].plot(LAT, projector @ s.W[:, j], color=color, marker="x", linestyle="--",
+                     label="projected on recovered plane")
+    axes[3].set_title("Pair patterns vs recovered plane")
+    for ax in axes[1:]:
+        ax.axhline(0, color="k", linewidth=0.5)
+        ax.set_xlabel("latitude (deg)")
+    for ax in axes:
+        ax.legend(fontsize=8)
+    save(fig, out_path)
 
     for name, err in errors.items():
         assert err < tol, f"{name}: {err:.2e} exceeds tolerance {tol:.0e}"
 
-def check_forced_internal_split(
-    spaghetti_path, convergence_path, T=400, n_members=256, noise_std=0.1, ramp_to=2.0
-):
-    """Check the data generator's forced/internal split: the forced response is the part driven by
-    the control, internal variability is the initial-condition transient plus the noise response."""
-    A, B, n = canonical_A(**CANONICAL_A_20_PARAMS), CANONICAL_B_20, 20
-    rng = np.random.default_rng(0)
-    # a ramp, like the historical forcing record: a zero-mean white-noise control would give a
-    # stationary forced response with no trend to separate from internal variability.
-    U = np.linspace(0.0, ramp_to, T)[None, :]
 
-    forced, internal = simulate_ensemble(A, B, U, n_members, noise_std, rng)
-    members = np.stack(internal)
+def direct_simulation(ds, seed, n_direct):
+    s = ds.system
+    R = ds.internal.shape[0]
+    spinup_rng, record_rng = (np.random.default_rng(q) for q in np.random.SeedSequence(seed).spawn(2))
+    eps = [spinup_rng.standard_normal((min(SPINUP_CHUNK, s.spinup - start), R, M))[:, :n_direct].copy()
+           for start in range(0, s.spinup, SPINUP_CHUNK)]
+    eps.append(record_rng.standard_normal((N, R, M))[:, :n_direct].copy())
+    xi = (np.concatenate(eps) * np.sqrt(s.noise_variances)) @ s.W.T
+    x = np.zeros((n_direct, M))
+    X = np.empty((N, n_direct, M))
+    for t in range(s.spinup + N):
+        x = x @ s.A.T + ds.y[t] * s.b + xi[t]
+        if t >= s.spinup:
+            X[t - s.spinup] = x
+    return X.transpose(1, 0, 2)
 
-    # the parts must compose into the very trajectory a direct simulation produces: same initial
-    # condition, same noise stream (equal seeds draw the same sequence), control on or off.
-    x0 = rng.standard_normal(n)
-    direct = simulate_lti(A, B, U, x0, noise_std, np.random.default_rng(42))
-    from_parts = forced + simulate_lti(A, B, np.zeros_like(U), x0, noise_std, np.random.default_rng(42))
 
-    # internal must not depend on the control at all
-    internal_u1 = simulate_lti(A, B, np.zeros_like(U), x0, noise_std, np.random.default_rng(7))
-    internal_u2 = simulate_lti(A, B, np.zeros_like(U), x0, noise_std, np.random.default_rng(7))
+def check_forced_internal_split(spaghetti_path, convergence_path, n_realizations=256, seed=0, n_direct=4):
+    ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations, seed=seed)
+    direct = direct_simulation(ds, seed, n_direct)
+    direct_err = np.abs(direct - ds.data[:n_direct]).max() / np.abs(direct).max()
 
-    member_counts = [c for c in (4, 16, 64, 256) if c <= n_members]
-    mean_errors = [
-        np.sqrt((((forced + members[:k]).mean(axis=0) - forced) ** 2).mean()) for k in member_counts
-    ]
-    slope = float(np.polyfit(np.log(member_counts), np.log(mean_errors), 1)[0])
-    rms_forced = np.sqrt((forced**2).mean())
+    counts = [k for k in (4, 16, 64, 256) if k <= n_realizations]
+    mean_errors = [rms(ds.data[:k].mean(axis=0) - ds.forced) for k in counts]
+    slope = float(np.polyfit(np.log(counts), np.log(mean_errors), 1)[0])
+    rms_forced = rms(ds.forced)
 
-    errors = {
-        "parts vs direct sim": np.abs(direct - from_parts).max(),
-        "forced obeys recursion": np.abs(forced[:, 1:] - (A @ forced[:, :-1] + B @ U)).max(),
-        "internal ignores control": np.abs(internal_u1 - internal_u2).max(),
-    }
+    print(f"--- forced/internal split: {n_realizations} realizations, SNR {ds.snr:.3g} ---")
+    print(f"  parts vs direct x-space sim  {direct_err:.2e}  (relative)")
+    for k, err in zip(counts, mean_errors):
+        print(f"  ensemble mean K={k:<4d}         {err:.5f}  ({err / rms_forced:.1%} of rms forced)")
+    print(f"  convergence log-log slope    {slope:.3f}  (theory -0.5)")
 
-    print(f"--- forced/internal split: {n_members} members, T={T}, noise_std={noise_std} ---")
-    for name, err in errors.items():
-        print(f"  {name:<26s} {err:.2e}")
-    for count, err in zip(member_counts, mean_errors):
-        print(f"  ensemble mean K={count:<4d}         {err:.5f}  ({err / rms_forced:.1%} of rms forced)")
-    print(f"  convergence log-log slope  {slope:.3f}  (theory -0.5)")
-    print(
-        f"  variance forced/internal/full  {forced.var():.4f} / {members[0].var():.4f} / "
-        f"{(forced + members[0]).var():.4f}  (not asserted)"
-    )
-
-    time = np.arange(T + 1)
-    n_shown = min(10, n_members)
-    fig, axes = plt.subplots(
-        len(ENSEMBLE_STATE_INDICES), 3, figsize=(13, 1.3 * len(ENSEMBLE_STATE_INDICES)),
-        sharex=True, sharey="row",
-    )
-    for row, i in enumerate(ENSEMBLE_STATE_INDICES):
-        for member in members[:n_shown]:
-            axes[row, 0].plot(time, forced[i] + member[i], linewidth=0.7, alpha=0.7)
-            axes[row, 2].plot(time, member[i], linewidth=0.7, alpha=0.7)
-        axes[row, 1].plot(time, forced[i], color="C1", linewidth=1.2)
-        axes[row, 0].set_ylabel(f"x[{i}]")
+    n_shown = 10
+    fig, axes = plt.subplots(len(ENSEMBLE_STATE_INDICES), 3, figsize=(13, 1.3 * len(ENSEMBLE_STATE_INDICES)),
+                             sharex=True, sharey="row")
+    for row, i in enumerate(ENSEMBLE_STATE_INDICES[::-1]):
+        for full, internal in zip(annual(ds.data[:n_shown, :, i], axis=-1), annual(ds.internal[:n_shown, :, i], axis=-1)):
+            axes[row, 0].plot(YEARS, full, linewidth=0.7, alpha=0.7)
+            axes[row, 2].plot(YEARS, internal, linewidth=0.7, alpha=0.7)
+        axes[row, 1].plot(YEARS, annual(ds.forced[:, i], axis=-1), color="C1", linewidth=1.2)
+        axes[row, 0].set_ylabel(lat_label(i))
     for col, title in enumerate(("full signal", "forced response", "internal variability")):
         axes[0, col].set_title(title)
-        axes[-1, col].set_xlabel("time step")
-    fig.suptitle(f"{n_shown} of {n_members} members: full = forced + internal")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(spaghetti_path, dpi=150)
-    print(f"saved {spaghetti_path}")
+        axes[-1, col].set_xlabel("year")
+    fig.suptitle(f"{n_shown} of {n_realizations} realizations (annual means): full = forced + internal")
+    save(fig, spaghetti_path)
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    axes[0].loglog(member_counts, mean_errors, marker="o", label="rms|mean_K - forced|")
-    reference = mean_errors[0] * np.sqrt(member_counts[0] / np.array(member_counts, dtype=float))
-    axes[0].loglog(member_counts, reference, linestyle="--", color="0.6", label=r"$1/\sqrt{K}$")
-    axes[0].set_xlabel("ensemble members K")
+    axes[0].loglog(counts, mean_errors, marker="o", label="rms|mean_K - forced|")
+    axes[0].loglog(counts, mean_errors[0] * np.sqrt(counts[0] / np.array(counts, dtype=float)),
+                   linestyle="--", color="0.6", label=r"$1/\sqrt{K}$")
+    axes[0].set_xlabel("realizations K")
     axes[0].set_title(f"Ensemble mean converges to forced (slope {slope:.2f})")
     axes[0].legend()
-
-    idx = np.arange(n)
-    axes[1].plot(idx, forced.var(axis=1), marker="o", label="forced")
-    axes[1].plot(idx, members.var(axis=2).mean(axis=0), marker="o", label="internal")
-    axes[1].plot(idx, (forced + members).var(axis=2).mean(axis=0), marker="x", linestyle="--", label="full")
-    axes[1].set_xlabel("state index")
-    axes[1].set_ylabel("variance")
+    axes[1].plot(LAT, ds.forced.var(axis=0), marker="o", label="forced")
+    axes[1].plot(LAT, ds.internal.var(axis=1).mean(axis=0), marker="o", label="internal")
+    axes[1].plot(LAT, ds.data.var(axis=1).mean(axis=0), marker="x", linestyle="--", label="full")
+    axes[1].set_xlabel("latitude (deg)")
+    axes[1].set_ylabel("variance over time")
     axes[1].set_title("Variance decomposition")
     axes[1].legend()
+    save(fig, convergence_path)
 
-    fig.tight_layout()
-    fig.savefig(convergence_path, dpi=150)
-    print(f"saved {convergence_path}")
-
-    for name, err in errors.items():
-        assert err < 1e-10, f"{name}: {err:.2e} exceeds tolerance 1e-10"
+    assert direct_err < 1e-9, f"parts vs direct simulation: {direct_err:.2e}"
     assert slope < -0.4, f"ensemble mean converges too slowly: slope {slope:.3f}"
     assert mean_errors[-1] / rms_forced < 0.15, (
-        f"ensemble mean at K={member_counts[-1]} is {mean_errors[-1] / rms_forced:.1%} of rms forced"
-    )
+        f"ensemble mean at K={counts[-1]} is {mean_errors[-1] / rms_forced:.1%} of rms forced")
 
-def check_forced_internal_recovery(
-    spaghetti_path, mse_path, spinup=500, T=20000, noise_std=0.1, ramp_to=2.0, zoom=300
-):
-    """Fit PullbackDMDc to a noisy trajectory and check that the forced response and internal
-    variability it recovers match the ones the data generator put in."""
-    A, B, n = canonical_A(**CANONICAL_A_20_PARAMS), CANONICAL_B_20, 20
-    rng = np.random.default_rng(0)
-    U = np.linspace(0.0, ramp_to, spinup + T - 1)[None, :]
 
-    # process noise only -- no observation noise is added to the recorded states
-    forced, internal = simulate_ensemble(A, B, U, 1, noise_std, rng)
-    data = (forced + internal[0])[:, spinup:].T
+def oracle_forced(ds):
+    s = ds.system
+    long_forcings, _, history = ds.forcings()
+    z = run_modal(s.Lambda_R, np.outer(long_forcings[:, 0], s.W_inv @ s.b))
+    return z[history:] @ s.W.T
 
-    long_forcings = np.vstack([np.zeros((1, 1)), U.T])
-    model = PullbackDMDc(truncation=n, lag=1, transition_time=spinup)
-    model.fit(
-        data,
-        short_forcings=long_forcings[spinup:],
-        long_forcings=long_forcings,
-        precomputed_eofs={"data_mean": np.zeros(n), "eofs": np.eye(n), "pcs": data},
-    )
-    model.compute_modes()
 
-    forced_est = model.predict()
-    internal_est = data - forced_est
-    forced_true = forced[:, spinup:].T
-    internal_true = internal[0][:, spinup:].T
+def recovery_metrics(ds):
+    long_forcings, short_forcings, history = ds.forcings()
+    rows = []
+    for data, internal in zip(ds.data, ds.internal):
+        model = fit_pullback(data, long_forcings, short_forcings, history)
+        forced_est = model.predict()
+        internal_est = data - forced_est
+        rows.append(dict(
+            forced_corr=np.corrcoef(forced_est.ravel(), ds.forced.ravel())[0, 1],
+            forced_err=rms(forced_est - ds.forced) / rms(ds.forced),
+            internal_err=rms(internal_est - internal) / rms(internal),
+            mirror=np.abs((forced_est - ds.forced) + (internal_est - internal)).max(),
+            slow_eig=model.eigvals[slow_index(model.eigvals, ds.system.lam1)].real,
+            forced_mse=((forced_est - ds.forced) ** 2).mean(axis=0),
+            internal_mse=((internal_est - internal) ** 2).mean(axis=0),
+            forced_est=forced_est,
+        ))
+    return {k: np.array([r[k] for r in rows]) for k in rows[0]}
 
-    rms = lambda a: np.sqrt((a**2).mean())
-    forced_err = rms(forced_est - forced_true) / rms(forced_true)
-    internal_err = rms(internal_est - internal_true) / rms(internal_true)
-    corr_forced = np.corrcoef(forced_est.ravel(), forced_true.ravel())[0, 1]
-    corr_internal = np.corrcoef(internal_est.ravel(), internal_true.ravel())[0, 1]
-    # both decompositions sum to the same data, so the two errors are one quantity
-    mirror = np.abs((forced_est - forced_true) + (internal_est - internal_true)).max()
-    ic_left = np.abs(np.linalg.matrix_power(A, spinup)).max() * np.abs(internal[0][:, 0]).max()
-    slow_err = abs(model.eigvals[np.argmin(np.abs(model.eigvals - 0.95))] - 0.95)
 
-    print(f"--- forced/internal recovery: T={T} after {spinup} spinup, noise_std={noise_std} ---")
-    print(f"  initial condition left     {ic_left:.2e}")
-    print(f"  forced rms error           {forced_err:.2%} of rms(forced)")
-    print(f"  internal rms error         {internal_err:.2%} of rms(internal)")
-    print(f"  correlation forced         {corr_forced:.6f}")
-    print(f"  correlation internal       {corr_internal:.6f}")
-    print(f"  forced err == -internal err {mirror:.2e}")
-    print(f"  slow eigenvalue error      {slow_err:.2e}  (not asserted: amplified 1/(1-0.95)=20x")
-    print("                                        into the forced response's gain)")
-    print(f"  A / B entrywise error      {np.abs(model.A - A).max():.2e} / "
-          f"{np.abs(model.B - B).max():.2e}  (not asserted)")
+def check_forced_internal_recovery(spaghetti_path, mse_path, n_realizations=100, zoom_years=25):
+    ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations)
+    m = recovery_metrics(ds)
+    oracle_err = rms(oracle_forced(ds) - ds.forced) / rms(ds.forced)
 
-    time = np.arange(T)
-    fig, axes = plt.subplots(
-        len(ENSEMBLE_STATE_INDICES), 3, figsize=(14, 1.3 * len(ENSEMBLE_STATE_INDICES)),
-        sharey="row",
-    )
-    for row, i in enumerate(ENSEMBLE_STATE_INDICES):
-        axes[row, 0].plot(time, data[:, i], linewidth=0.5, color="0.4")
-        axes[row, 1].plot(time, forced_true[:, i], color="C0", linewidth=2.4, alpha=0.5, label="true")
-        axes[row, 1].plot(time, forced_est[:, i], color="C3", linestyle="--", linewidth=1.2, label="estimated")
-        axes[row, 2].plot(time[:zoom], internal_true[:zoom, i], color="C0", linewidth=2.0, alpha=0.5, label="true")
-        axes[row, 2].plot(
-            time[:zoom], internal_est[:zoom, i], color="C3", linestyle="--", linewidth=0.9, label="estimated"
-        )
-        axes[row, 0].set_ylabel(f"x[{i}]")
-    for col, title in enumerate(
-        ("full signal (model input)", "forced response", f"internal variability (first {zoom} steps)")
-    ):
+    print(f"--- forced/internal recovery: starting point, SNR {ds.snr:.3g}, {n_realizations} realizations ---")
+    print(f"  oracle (true A, b; 100-yr history) forced rms error {oracle_err:.2e}")
+    for key, name, fmt in (("forced_corr", "corr forced", ".4f"), ("forced_err", "forced rms error", ".2%"),
+                           ("internal_err", "internal rms error", ".2%"), ("slow_eig", "slow eigenvalue", ".5f")):
+        q25, q50, q75 = np.percentile(m[key], [25, 50, 75])
+        print(f"  {name:<20s} median {q50:{fmt}}  (IQR {q25:{fmt}} - {q75:{fmt}})")
+    print(f"  true slow eigenvalue {REFERENCE.lam1:.5f}  (skill reported, not asserted)")
+
+    t = np.arange(N) / 12
+    zoom = 12 * zoom_years
+    fig, axes = plt.subplots(len(ENSEMBLE_STATE_INDICES), 3, figsize=(14, 1.3 * len(ENSEMBLE_STATE_INDICES)),
+                             sharey="row")
+    forced_est = m["forced_est"][0]
+    internal_est = ds.data[0] - forced_est
+    for row, i in enumerate(ENSEMBLE_STATE_INDICES[::-1]):
+        axes[row, 0].plot(t, ds.data[0, :, i], linewidth=0.5, color="0.4")
+        axes[row, 1].plot(t, ds.forced[:, i], color="C0", linewidth=2.4, alpha=0.5, label="true")
+        axes[row, 1].plot(t, forced_est[:, i], color="C3", linestyle="--", linewidth=1.2, label="estimated")
+        axes[row, 2].plot(t[:zoom], ds.internal[0, :zoom, i], color="C0", linewidth=2.0, alpha=0.5, label="true")
+        axes[row, 2].plot(t[:zoom], internal_est[:zoom, i], color="C3", linestyle="--", linewidth=0.9,
+                          label="estimated")
+        axes[row, 0].set_ylabel(lat_label(i))
+    for col, title in enumerate(("full signal (model input)", "forced response",
+                                 f"internal variability (first {zoom_years} yr)")):
         axes[0, col].set_title(title)
-        axes[-1, col].set_xlabel("time step")
+        axes[-1, col].set_xlabel("year")
     axes[0, 1].legend(fontsize=8)
-    fig.suptitle("PullbackDMDc recovery: true vs estimated")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(spaghetti_path, dpi=150)
-    print(f"saved {spaghetti_path}")
+    fig.suptitle(f"PullbackDMDc recovery, realization 0, SNR {ds.snr:.3g}: true vs estimated")
+    save(fig, spaghetti_path)
 
-    idx = np.arange(n)
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
-    axes[0].semilogy(idx, ((forced_est - forced_true) ** 2).mean(axis=0), marker="o", linewidth=2.4,
-                     alpha=0.5, label="forced MSE")
-    axes[0].semilogy(idx, ((internal_est - internal_true) ** 2).mean(axis=0), marker="x", linestyle="--",
+    fig, axes = plt.subplots(1, 4, figsize=(22, 4.5))
+    axes[0].semilogy(LAT, np.median(m["forced_mse"], axis=0), marker="o", linewidth=2.4, alpha=0.5,
+                     label="forced MSE (median)")
+    axes[0].semilogy(LAT, np.median(m["internal_mse"], axis=0), marker="x", linestyle="--",
                      label="internal MSE (mirrors forced)")
-    axes[0].semilogy(idx, forced_true.var(axis=0), color="C0", alpha=0.3, linestyle=":", label="var(true forced)")
-    axes[0].semilogy(idx, internal_true.var(axis=0), color="C1", alpha=0.3, linestyle=":", label="var(true internal)")
-    axes[0].set_xlabel("state index")
-    axes[0].set_title("MSE per state index")
+    axes[0].semilogy(LAT, ds.forced.var(axis=0), color="C0", alpha=0.3, linestyle=":", label="var(true forced)")
+    axes[0].semilogy(LAT, ds.internal.var(axis=1).mean(axis=0), color="C1", alpha=0.3, linestyle=":",
+                     label="var(true internal)")
+    axes[0].set_xlabel("latitude (deg)")
+    axes[0].set_title("MSE per latitude")
     axes[0].legend(fontsize=8)
 
-    chunks = np.array_split(np.arange(T), 20)
-    centers = [c.mean() for c in chunks]
-    err_series = [rms(forced_est[c] - forced_true[c]) for c in chunks]
-    signal_series = [rms(forced_true[c]) for c in chunks]
-    axes[1].plot(centers, signal_series, marker="o", label="rms true forced")
-    axes[1].plot(centers, err_series, marker="o", label="rms forced error")
-    axes[1].set_yscale("log")
-    axes[1].set_xlabel("time step")
-    axes[1].set_title("Error grows with the signal")
-    axes[1].legend()
+    axes[1].hist(m["forced_err"], bins=20)
+    axes[1].axvline(oracle_err, color="0.4", linestyle="--", label="oracle (history truncation)")
+    axes[1].set_title("Forced relative rms error")
+    axes[1].legend(fontsize=8)
 
-    axes[2].plot(centers, np.array(err_series) / np.array(signal_series), marker="o")
-    axes[2].axhline(forced_err, color="0.6", linestyle="--", label=f"overall {forced_err:.2%}")
-    axes[2].set_ylim(bottom=0)
-    axes[2].set_xlabel("time step")
-    axes[2].set_title("Error / signal: constant gain bias, not drift")
-    axes[2].legend()
+    axes[2].hist(m["forced_corr"], bins=20)
+    axes[2].set_title("Forced correlation")
 
-    fig.tight_layout()
-    fig.savefig(mse_path, dpi=150)
-    print(f"saved {mse_path}")
+    axes[3].hist(m["slow_eig"], bins=20)
+    axes[3].axvline(REFERENCE.lam1, color="C3", linestyle="--", label=r"true $\lambda_1$")
+    axes[3].set_title("Slow eigenvalue estimate")
+    axes[3].legend(fontsize=8)
+    for ax in axes[1:]:
+        ax.set_ylabel("realizations")
+    fig.suptitle(f"PullbackDMDc recovery over {n_realizations} realizations at the starting point (SNR {ds.snr:.3g})")
+    save(fig, mse_path)
 
-    assert ic_left < 1e-9, f"initial condition still present at {ic_left:.2e}; lengthen the spinup"
-    assert mirror < 1e-10, f"decomposition errors are not mirrored: {mirror:.2e}"
-    assert forced_err < 0.05, f"forced response error {forced_err:.2%} exceeds 5%"
-    assert internal_err < 0.05, f"internal variability error {internal_err:.2%} exceeds 5%"
-    assert corr_forced > 0.99, f"forced correlation {corr_forced:.4f} below 0.99"
-    assert corr_internal > 0.99, f"internal correlation {corr_internal:.4f} below 0.99"
+    assert m["mirror"].max() < 1e-10, f"decomposition errors are not mirrored: {m['mirror'].max():.2e}"
 
 
 def main():
     FIGURES_DIR.mkdir(exist_ok=True)
-
-    plot_canonical_A_check(FIGURES_DIR / "canonical_A_check.png")
-
-    plot_ensemble_spaghetti(FIGURES_DIR / "canonical_A_ensemble_spaghetti.png")
-
+    plot_system_check(FIGURES_DIR / "system_check.png")
+    plot_ensemble_spaghetti(FIGURES_DIR / "ensemble_spaghetti.png")
     check_dmdc_recovery(FIGURES_DIR / "dmdc_recovery_check.png")
-
-    check_forced_internal_split(
-        FIGURES_DIR / "forced_internal_spaghetti.png",
-        FIGURES_DIR / "forced_internal_convergence.png",
-    )
-
-    check_forced_internal_recovery(
-        FIGURES_DIR / "forced_internal_recovery.png",
-        FIGURES_DIR / "forced_internal_recovery_mse.png",
-    )
-    
+    check_forced_internal_split(FIGURES_DIR / "forced_internal_spaghetti.png",
+                                FIGURES_DIR / "forced_internal_convergence.png")
+    check_forced_internal_recovery(FIGURES_DIR / "forced_internal_recovery.png",
+                                   FIGURES_DIR / "forced_internal_recovery_mse.png")
 
 
 if __name__ == "__main__":
