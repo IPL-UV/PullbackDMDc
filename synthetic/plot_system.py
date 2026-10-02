@@ -28,6 +28,7 @@ from ablations import (
     eigenvalue,
     find_level,
     forcing_series,
+    gauss_params,
     make_dataset,
     record_years,
     run_modal,
@@ -45,12 +46,17 @@ LONG_TAU1_YR = 100  # the longest slow timescale in the sweeps, so the longest s
 FORCING_COLORS = {"file": "0.6", "analytic": "k", "analytic_gauss": "tab:blue"}
 
 
+def gauss_label(system):
+    _, (bump_amp, bump_year, _), (dip_amp, dip_year, _) = gauss_params(system)
+    return f"exp + Gaussians (+{bump_amp:.3g} at {bump_year:.0f}, $-${dip_amp:.3g} at {dip_year:.0f})"
+
+
 def forcing_curves(system, t_yr):
     """{forcing_source: (values at t_yr, label)} for the two analytic models; the file series is loaded separately."""
     return {
         "analytic": (co2_forcing_model(t_yr, system.forcing_efold_yr),
                      rf"exp: $c + a\,e^{{(t-2014)/{system.forcing_efold_yr:.3g}\,\mathrm{{yr}}}}$"),
-        "analytic_gauss": (co2_forcing_gauss_model(t_yr), "exp + Gaussians (+1921, $-$1966)"),
+        "analytic_gauss": (co2_forcing_gauss_model(t_yr, *gauss_params(system)), gauss_label(system)),
     }
 
 

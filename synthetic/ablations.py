@@ -43,6 +43,8 @@ CO2_GAUSS_FIT = dict(c=-0.005366940477657721, a=1.9642341976276356, k=1.58190783
                      A_pos=0.04816339012920922, mu_pos=1921.3285060598805, sigma_pos=17.8812620771011,
                      A_neg=0.13721889229450532, mu_neg=1966.0271283481388, sigma_neg=14.114214602524019)
 FORCING_SOURCES = ("analytic", "analytic_gauss", "file")
+GAUSS_FIELDS = ("gauss_efold_yr", "gauss_bump_amp", "gauss_bump_year", "gauss_bump_width_yr",
+                "gauss_dip_amp", "gauss_dip_year", "gauss_dip_width_yr")
 FILE_TREND_YEARS = 10  # after a forcing file's data ends, the forcing continues its trend over these last years
 N_REALIZATIONS = DEFAULT.n_realizations
 PATTERN_SEED = DEFAULT.pattern_seed
@@ -83,6 +85,13 @@ class System:
     forcing_source: str = DEFAULT.forcing_source
     forcing_file: str = DEFAULT.forcing_file
     forcing_column: str = DEFAULT.forcing_column
+    gauss_efold_yr: float = DEFAULT.gauss_efold_yr
+    gauss_bump_amp: float = DEFAULT.gauss_bump_amp
+    gauss_bump_year: float = DEFAULT.gauss_bump_year
+    gauss_bump_width_yr: float = DEFAULT.gauss_bump_width_yr
+    gauss_dip_amp: float = DEFAULT.gauss_dip_amp
+    gauss_dip_year: float = DEFAULT.gauss_dip_year
+    gauss_dip_width_yr: float = DEFAULT.gauss_dip_width_yr
 
     @property
     def Lambda_R(self):
@@ -179,9 +188,22 @@ def exp_gauss_model(t, c, a, k, A_pos, mu_pos, sigma_pos, A_neg, mu_neg, sigma_n
             + gaussian(t, A_pos, mu_pos, sigma_pos) - gaussian(t, A_neg, mu_neg, sigma_neg))
 
 
-def co2_forcing_gauss_model(t_yr):
-    """Analytic CO2 forcing (W m^-2) at fractional years: the AR6 fit of exp_gauss_model."""
-    return exp_gauss_model(t_yr, **CO2_GAUSS_FIT)
+GAUSS_BUMP = (DEFAULT.gauss_bump_amp, DEFAULT.gauss_bump_year, DEFAULT.gauss_bump_width_yr)
+GAUSS_DIP = (DEFAULT.gauss_dip_amp, DEFAULT.gauss_dip_year, DEFAULT.gauss_dip_width_yr)
+
+
+def co2_forcing_gauss_model(t_yr, efold_yr=DEFAULT.gauss_efold_yr, bump=GAUSS_BUMP, dip=GAUSS_DIP):
+    """Analytic CO2 forcing (W m^-2) at fractional years: c + a exp((t - 2014) / efold_yr) + bump - dip, with c, a
+    from the AR6 fit and each Gaussian given as (amplitude, year, width); the defaults reproduce the fit."""
+    t = np.asarray(t_yr, dtype=float)
+    return (CO2_GAUSS_FIT["c"] + CO2_GAUSS_FIT["a"] * np.exp((t - CO2_FIT_REFERENCE_YEAR) / efold_yr)
+            + gaussian(t, *bump) - gaussian(t, *dip))
+
+
+def gauss_params(system):
+    """(efold_yr, bump, dip) of a system's analytic_gauss forcing."""
+    return (system.gauss_efold_yr, (system.gauss_bump_amp, system.gauss_bump_year, system.gauss_bump_width_yr),
+            (system.gauss_dip_amp, system.gauss_dip_year, system.gauss_dip_width_yr))
 
 
 def record_years(system):
@@ -194,7 +216,7 @@ def forcing_values(system, t_yr):
     if system.forcing_source == "analytic":
         return co2_forcing_model(t_yr, system.forcing_efold_yr)
     if system.forcing_source == "analytic_gauss":
-        return co2_forcing_gauss_model(t_yr)
+        return co2_forcing_gauss_model(t_yr, *gauss_params(system))
     if system.forcing_source == "file":
         return file_forcing(t_yr, system.forcing_file, system.forcing_column)
     raise ValueError(f"unknown forcing_source {system.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
@@ -338,6 +360,12 @@ class Reference:
 def build_reference(cfg=DEFAULT):
     if cfg.forcing_source not in FORCING_SOURCES:
         raise ValueError(f"unknown forcing_source {cfg.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
+    if cfg.forcing_source == "analytic_gauss":
+        bad = [f"{k}={getattr(cfg, k)!r}" for k in ("gauss_bump_amp", "gauss_dip_amp") if getattr(cfg, k) < 0]
+        bad += [f"{k}={getattr(cfg, k)!r}" for k in ("gauss_efold_yr", "gauss_bump_width_yr", "gauss_dip_width_yr")
+                if getattr(cfg, k) <= 0]
+        if bad:
+            raise ValueError(f"analytic_gauss needs amplitudes >= 0 and widths, efold > 0; got {', '.join(bad)}")
     W, W_inv, b, phi = make_W(M, cfg.pattern_seed)
     unit = System(
         W=W, W_inv=W_inv, b=b,
@@ -345,6 +373,7 @@ def build_reference(cfg=DEFAULT):
         lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
         history=cfg.history, record_end_year=cfg.record_end_year, forcing_efold_yr=cfg.forcing_efold_yr,
         forcing_source=cfg.forcing_source, forcing_file=cfg.forcing_file, forcing_column=cfg.forcing_column,
+        **{f: getattr(cfg, f) for f in GAUSS_FIELDS},
     )
     amplitude = np.sqrt(cfg.forced_variance / forced_variance(forced_response(unit)[1]))
     budget = config_budget(cfg.forced_variance, cfg)

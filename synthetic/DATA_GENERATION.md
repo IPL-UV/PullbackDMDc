@@ -42,6 +42,10 @@ $$F(t)=c+a\,e^{k(t-2014)/100}+A_+e^{-(t-\mu_+)^2/2\sigma_+^2}-A_-e^{-(t-\mu_-)^2
 The fitted values are $c=-0.0054$, $a=1.964$ and $k=1.582$ (e-folding 63 yr), with a bump $A_+=0.048$ at $\mu_+=1921$ ($\sigma_+=17.9$ yr) and a dip $A_-=0.137$ at $\mu_-=1966$ ($\sigma_-=14.1$ yr).
 - **Fit:** the RMSE is $0.0092$ W m$^{-2}$, and $0.0101$ over the record, against $0.038$ and $0.055$ for the exponential. The record shape, after centering and scaling to unit std, has an RMSE of $0.022$ against $0.124$.
 - **Past:** the Gaussians vanish before about 1850, so the past is still constant: $|F-c|<3\times10^{-4}$ of the rise before 1500. `forcing_efold_yr` does not affect this model.
+- **Shape parameters:** `gauss_efold_yr`, `gauss_bump_amp`, `gauss_bump_year`, `gauss_bump_width_yr`, `gauss_dip_amp`, `gauss_dip_year` and `gauss_dip_width_yr` default to the fit above. They can be overridden, for example `--set gauss_dip_amp=0`.
+  - Amplitudes are in W m$^{-2}$ next to the fixed $a=1.964$, and only their ratio to the exponential matters. An amplitude of 0 removes that Gaussian.
+  - Amplitudes must be $\ge0$ and widths and e-folding $>0$.
+  - $c$ and $a$ stay at the fit, since they drop out.
 - **Comparison:** `compare_forcings.py` plots the true forcing and both models (`figures/diagnostics/data/compare_forcings.png`). It also plots the forced response of one system under each forcing (`compare_forced_responses.png`).
 
 **Forcing source** (`forcing_source`, default `"analytic"`). With `forcing_source = "file"`, $F$ is instead column `forcing_column` (default `co2`) of `forcing_file` (default `data_preparation/AR6_ERF_1750-2019.csv`; a relative path is relative to the repo root). `load_forcing_file` accepts two formats:

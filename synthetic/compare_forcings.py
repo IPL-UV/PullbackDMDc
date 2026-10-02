@@ -3,6 +3,12 @@
     python compare_forcings.py                          # default system
     python compare_forcings.py --set tau1_yr=50         # the forced responses of a tweaked system
     python compare_forcings.py --from-run baseline --member 3
+    python compare_forcings.py --set gauss_dip_amp=0                     # exp + bump only
+    python compare_forcings.py --set gauss_bump_year=1940 gauss_bump_width_yr=8 gauss_efold_yr=50
+
+Shape of the exp + Gaussians curve (defaults: the joint fit to AR6 CO2; amplitudes in W m^-2 next to the exp's
+a = 1.964, amplitude 0 removes a Gaussian): gauss_efold_yr, gauss_bump_amp, gauss_bump_year, gauss_bump_width_yr,
+gauss_dip_amp, gauss_dip_year, gauss_dip_width_yr. The exp curve's shape is forcing_efold_yr.
 
 Writes to figures/diagnostics/data/:
     compare_forcings.png          the three forcings, their misfits, and their shapes over the record
@@ -18,11 +24,11 @@ import numpy as np
 
 import plot_style  # noqa: F401  (sets the shared rcParams)
 from ablations import (
-    CO2_GAUSS_FIT,
     M,
     build_reference,
-    exp_gauss_model,
+    co2_forcing_gauss_model,
     file_forcing,
+    gauss_params,
     gaussian,
     load_forcing_file,
     record_years,
@@ -67,17 +73,16 @@ def plot_forcing_comparison(cfg, out_path):
     ax.legend(fontsize=7, loc="upper left")
 
     ax = axes[0, 1]
-    exp_part = exp_gauss_model(t, **{**CO2_GAUSS_FIT, "A_pos": 0.0, "A_neg": 0.0})
-    bump = gaussian(t, CO2_GAUSS_FIT["A_pos"], CO2_GAUSS_FIT["mu_pos"], CO2_GAUSS_FIT["sigma_pos"])
-    dip = gaussian(t, CO2_GAUSS_FIT["A_neg"], CO2_GAUSS_FIT["mu_neg"], CO2_GAUSS_FIT["sigma_neg"])
-    ax.plot(t, true - exp_part, color=FORCING_COLORS["file"], linewidth=2.5, label="true minus the fit's exp part")
+    efold, bump_params, dip_params = gauss_params(system)
+    exp_part = co2_forcing_gauss_model(t, efold, (0.0, 0.0, 1.0), (0.0, 0.0, 1.0))
+    bump, dip = gaussian(t, *bump_params), gaussian(t, *dip_params)
+    ax.plot(t, true - exp_part, color=FORCING_COLORS["file"], linewidth=2.5,
+            label=f"true minus the model's exp part (e-fold {efold:.3g} yr)")
     ax.plot(t, bump - dip, color=FORCING_COLORS["analytic_gauss"], linewidth=1.4, label="Gaussian correction")
     ax.plot(t, bump, color=FORCING_COLORS["analytic_gauss"], linewidth=0.7, linestyle="--",
-            label=f"+{CO2_GAUSS_FIT['A_pos']:.3f} at {CO2_GAUSS_FIT['mu_pos']:.0f} "
-                  f"($\\sigma$ {CO2_GAUSS_FIT['sigma_pos']:.1f} yr)")
+            label=f"+{bump_params[0]:.3f} at {bump_params[1]:.0f} ($\\sigma$ {bump_params[2]:.1f} yr)")
     ax.plot(t, -dip, color=FORCING_COLORS["analytic_gauss"], linewidth=0.7, linestyle=":",
-            label=f"$-${CO2_GAUSS_FIT['A_neg']:.3f} at {CO2_GAUSS_FIT['mu_neg']:.0f} "
-                  f"($\\sigma$ {CO2_GAUSS_FIT['sigma_neg']:.1f} yr)")
+            label=f"$-${dip_params[0]:.3f} at {dip_params[1]:.0f} ($\\sigma$ {dip_params[2]:.1f} yr)")
     ax.axhline(0, color="0.5", linewidth=0.6)
     ax.set_title("(b) what the Gaussians capture", fontsize=9)
     ax.set_ylabel("W m$^{-2}$")

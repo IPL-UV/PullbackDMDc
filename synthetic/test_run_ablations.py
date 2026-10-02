@@ -31,10 +31,12 @@ from ablations import (
     eigenvalue,
     empirical_snr,
     exp_gauss_model,
+    gaussian,
     equal_budget,
     file_forcing,
     find_level,
     forced_variance,
+    forcing_values,
     joint_sweep,
     load_forcing_file,
     make_dataset,
@@ -297,12 +299,68 @@ def test_gauss_source():
     assert np.array_equal(efold.y, ds.y)
 
 
+def test_gauss_defaults_match_fit():
+    fit = CO2_GAUSS_FIT
+    assert abs(DEFAULT.gauss_efold_yr - 100 / fit["k"]) < 1e-12
+    assert (DEFAULT.gauss_bump_amp, DEFAULT.gauss_bump_year, DEFAULT.gauss_bump_width_yr) == (
+        fit["A_pos"], fit["mu_pos"], fit["sigma_pos"])
+    assert (DEFAULT.gauss_dip_amp, DEFAULT.gauss_dip_year, DEFAULT.gauss_dip_width_yr) == (
+        fit["A_neg"], fit["mu_neg"], fit["sigma_neg"])
+    t = np.linspace(1500, 2030, 4000)
+    expected = exp_gauss_model(t, **fit)
+    assert np.allclose(co2_forcing_gauss_model(t), expected, rtol=1e-12, atol=0)
+    assert np.allclose(forcing_values(build_reference(GAUSS).system, t), expected, rtol=1e-12, atol=0)
+
+
+def gauss_record(overrides, source="analytic_gauss"):
+    ref = build_reference(with_overrides(DEFAULT, [f"forcing_source={source}", *overrides]))
+    ds = make_dataset(ref.system, equal_budget, n_realizations=1)
+    return ref, ds
+
+
+def test_gauss_overrides():
+    t = np.linspace(1750, 2020, 5000)
+    no_dip = build_reference(with_overrides(GAUSS, ["gauss_dip_amp=0"])).system
+    bump = gaussian(t, DEFAULT.gauss_bump_amp, DEFAULT.gauss_bump_year, DEFAULT.gauss_bump_width_yr)
+    exp_only = co2_forcing_gauss_model(t, DEFAULT.gauss_efold_yr, (0.0, 0.0, 1.0), (0.0, 0.0, 1.0))
+    assert np.allclose(forcing_values(no_dip, t), exp_only + bump, rtol=1e-14, atol=1e-15)
+    moved = build_reference(with_overrides(GAUSS, ["gauss_dip_amp=0", "gauss_bump_year=1940"])).system
+    peak = t[np.argmax(forcing_values(moved, t) - exp_only)]
+    assert abs(peak - 1940) < 0.1, peak
+    _, base = gauss_record([])
+    for overrides in (["gauss_efold_yr=40"], ["gauss_dip_amp=0"], ["gauss_bump_year=1940", "gauss_bump_width_yr=8"]):
+        ref, ds = gauss_record(overrides)
+        assert abs(ds.V_f - DEFAULT.forced_variance) < 1e-9, overrides
+        assert np.abs(ds.y[-N:] - base.y[-N:]).max() > 1e-3, overrides
+    # the gauss_* fields only shape analytic_gauss
+    _, plain = gauss_record([], source="analytic")
+    _, tweaked = gauss_record(["gauss_dip_amp=0", "gauss_efold_yr=30"], source="analytic")
+    assert np.array_equal(plain.y, tweaked.y)
+
+
+def test_gauss_validation():
+    for bad in (["gauss_bump_amp=-0.1"], ["gauss_dip_amp=-1"], ["gauss_bump_width_yr=0"],
+                ["gauss_dip_width_yr=-3"], ["gauss_efold_yr=0"]):
+        try:
+            build_reference(with_overrides(GAUSS, bad))
+        except ValueError as e:
+            assert bad[0].split("=")[0] in str(e), str(e)
+        else:
+            raise AssertionError(f"{bad} should raise")
+        build_reference(with_overrides(DEFAULT, bad))  # ignored by the other sources
+
+
 def test_compare_forcings():
     with tempfile.TemporaryDirectory() as tmp:
         table = plot_forcing_comparison(DEFAULT, pathlib.Path(tmp) / "f.png")
         plot_forced_response_comparison(DEFAULT, pathlib.Path(tmp) / "r.png", member=1)
         assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("f.png", "r.png"))
     assert table["analytic_gauss"][0] < table["analytic"][0] and table["analytic_gauss"][2] < table["analytic"][2]
+    with tempfile.TemporaryDirectory() as tmp:
+        no_dip = plot_forcing_comparison(with_overrides(DEFAULT, ["gauss_dip_amp=0"]), pathlib.Path(tmp) / "f.png")
+        plot_forced_response_comparison(with_overrides(DEFAULT, ["gauss_dip_amp=0"]), pathlib.Path(tmp) / "r.png")
+        assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("f.png", "r.png"))
+    assert no_dip["analytic_gauss"][0] > table["analytic_gauss"][0] and no_dip["analytic"] == table["analytic"]
     datasets = forced_datasets(DEFAULT, member=1)
     internal = [ds.internal[1] for ds in datasets.values()]
     assert all(np.allclose(x, internal[0], rtol=1e-10, atol=1e-12) for x in internal[1:])
