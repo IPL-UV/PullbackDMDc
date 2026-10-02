@@ -1,30 +1,37 @@
-"""Synthetic datasets for the ablation studies: total SNR, partial SNR, slow timescale and spatial overlap."""
+"""Synthetic datasets for the ablation studies: total SNR, partial SNR, slow timescale and spatial overlap.
+
+Every tunable value lives in config.Config; the module-level constants below are the DEFAULT config's values,
+kept so existing scripts can import them.
+"""
 
 from dataclasses import dataclass, replace
-from functools import partial
+from functools import lru_cache, partial
+from typing import Tuple
 
 import numpy as np
 
+from config import DEFAULT
 from synthetic_system import make_W
 
 M = 20
 N = 1200
-HISTORY = 1200
-N_REALIZATIONS = 100
-PATTERN_SEED = 22
-EIGENVALUE_SEED = 20
-COMPLEMENT_EIG_RANGE = (0.0, 0.1)
-TAU1_YR = 20
-TAU_P_YR = 2
-PERIOD_P_YR = 4
 SPINUP_DECAY_TIMES = 40
 SPINUP_CHUNK = 1200
-
-TOTAL_SNRS = [1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30]
-PARTIAL_SNR_FACTORS = [1 / 4, 1 / 2, 1, 2, 4]
+MIN_NOISE_SPINUP = 1200
 PARTIAL_SNR_COMPONENTS = dict(slow="s1_sq", pair="sp_sq", complement="sc_sq")
-SLOW_TIMESCALES_YR = [1, 2, 5, 10, 20, 50, 100]
 SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
+
+HISTORY = DEFAULT.history
+N_REALIZATIONS = DEFAULT.n_realizations
+PATTERN_SEED = DEFAULT.pattern_seed
+EIGENVALUE_SEED = DEFAULT.eigenvalue_seed
+COMPLEMENT_EIG_RANGE = DEFAULT.complement_eig_range
+TAU1_YR = DEFAULT.tau1_yr
+TAU_P_YR = DEFAULT.tau_p_yr
+PERIOD_P_YR = DEFAULT.period_p_yr
+TOTAL_SNRS = list(DEFAULT.total_snrs)
+PARTIAL_SNR_FACTORS = list(DEFAULT.partial_snr_factors)
+SLOW_TIMESCALES_YR = list(DEFAULT.slow_timescales_yr)
 
 
 def eigenvalue(tau_months):
@@ -48,6 +55,7 @@ class System:
     s1_sq: float = np.nan
     sp_sq: float = np.nan
     sc_sq: float = np.nan
+    history: int = HISTORY
 
     @property
     def Lambda_R(self):
@@ -74,8 +82,14 @@ class System:
         return self.modal_variances * (1 - np.abs(self.eigvals) ** 2)
 
     @property
+    def noise_spinup(self):
+        # independent of history, so changing the methods' forcing history leaves the realizations unchanged
+        return max(int(np.ceil(SPINUP_DECAY_TIMES * decay_time(self.eigvals).max())), MIN_NOISE_SPINUP)
+
+    @property
     def spinup(self):
-        return max(int(np.ceil(SPINUP_DECAY_TIMES * decay_time(self.eigvals).max())), HISTORY)
+        """Length of the forcing series before the record: the noise spin-up, extended to cover the history."""
+        return max(self.noise_spinup, self.history)
 
 
 def forcing_F(t_yr):
@@ -108,8 +122,8 @@ def internal_variability(system, n_realizations, seed):
     spinup_rng, record_rng = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2))
     noise_std = np.sqrt(system.noise_variances)
     z = np.zeros((n_realizations, M))
-    for start in range(0, system.spinup, SPINUP_CHUNK):
-        steps = min(SPINUP_CHUNK, system.spinup - start)
+    for start in range(0, system.noise_spinup, SPINUP_CHUNK):
+        steps = min(SPINUP_CHUNK, system.noise_spinup - start)
         z = run_modal(system.Lambda_R, noise_std * spinup_rng.standard_normal((steps, n_realizations, M)), z)[-1]
     z = run_modal(system.Lambda_R, noise_std * record_rng.standard_normal((N, n_realizations, M)), z)
     return (z @ system.W.T).transpose(1, 0, 2)
@@ -127,8 +141,19 @@ def theoretical_snr(V_f, s1_sq, sp_sq, sc_sq):
     return V_f / internal_variance(s1_sq, sp_sq, sc_sq)
 
 
+def config_budget(V_f, cfg=DEFAULT, scale=1.0, component=None, factor=1.0):
+    """Modal variances from cfg's variance shares (units of V_f); scale multiplies all, factor one component."""
+    slow, pair, complement = cfg.variances
+    budget = dict(s1_sq=slow * V_f, sp_sq=pair * V_f / 2, sc_sq=complement * V_f / (M - 3))
+    if scale != 1.0:
+        budget = {k: v * scale for k, v in budget.items()}
+    if component is not None:
+        budget[component] *= factor
+    return budget
+
+
 def equal_budget(V_f):
-    return dict(s1_sq=V_f, sp_sq=V_f / 2, sc_sq=V_f / (M - 3))
+    return config_budget(V_f)
 
 
 def pair_plane_overlap(W):
@@ -170,7 +195,8 @@ class SyntheticDataset:
         s = self.system
         return theoretical_snr(self.V_f, s.s1_sq, s.sp_sq, s.sc_sq)
 
-    def forcings(self, history=HISTORY):
+    def forcings(self, history=None):
+        history = self.system.history if history is None else history
         long_forcings = self.y[self.system.spinup - history:, None]
         return long_forcings, long_forcings[history:], history
 
@@ -193,64 +219,139 @@ def modal_coordinates(ds, x):
     return x @ ds.system.W_inv.T
 
 
-W_REF, W_INV_REF, B_HAT, PHI = make_W(M, PATTERN_SEED)
-UNIT_FORCING_REFERENCE = System(
-    W=W_REF, W_inv=W_INV_REF, b=B_HAT,
-    lam1=eigenvalue(12 * TAU1_YR), rho=eigenvalue(12 * TAU_P_YR), theta=2 * np.pi / (12 * PERIOD_P_YR),
-    lam_c=np.random.default_rng(EIGENVALUE_SEED).uniform(*COMPLEMENT_EIG_RANGE, size=M - 3),
-)
-FORCING_AMPLITUDE = np.sqrt(M / forced_variance(forced_response(UNIT_FORCING_REFERENCE)[1]))
-REFERENCE = replace(UNIT_FORCING_REFERENCE, forcing_amplitude=FORCING_AMPLITUDE)
-REFERENCE_BUDGET = equal_budget(M)
-REFERENCE_SNR = theoretical_snr(M, **REFERENCE_BUDGET)
-BASE_OVERLAP = pair_plane_overlap(W_REF)
-MODE_OVERLAPS = [0.0, 0.25, BASE_OVERLAP, 0.75, 0.9, 0.95]
+@dataclass(frozen=True, eq=False)
+class Reference:
+    unit_system: System  # forcing amplitude 1
+    system: System  # forcing amplitude calibrated so that V_f = cfg.forced_variance
+    budget: dict
+    snr: float
+    base_overlap: float
+    mode_overlaps: Tuple[float, ...]
+    phi: np.ndarray
+
+
+@lru_cache(maxsize=None)
+def build_reference(cfg=DEFAULT):
+    W, W_inv, b, phi = make_W(M, cfg.pattern_seed)
+    unit = System(
+        W=W, W_inv=W_inv, b=b,
+        lam1=eigenvalue(12 * cfg.tau1_yr), rho=eigenvalue(12 * cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
+        lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
+        history=cfg.history,
+    )
+    amplitude = np.sqrt(cfg.forced_variance / forced_variance(forced_response(unit)[1]))
+    budget = config_budget(cfg.forced_variance, cfg)
+    base_overlap = pair_plane_overlap(W)
+    overlaps = cfg.mode_overlaps if cfg.mode_overlaps is not None else (0.0, 0.25, base_overlap, 0.75, 0.9, 0.95)
+    return Reference(unit_system=unit, system=replace(unit, forcing_amplitude=amplitude), budget=budget,
+                     snr=theoretical_snr(cfg.forced_variance, **budget), base_overlap=base_overlap,
+                     mode_overlaps=tuple(overlaps), phi=phi)
+
+
+_REF = build_reference(DEFAULT)
+W_REF, W_INV_REF, B_HAT, PHI = _REF.system.W, _REF.system.W_inv, _REF.system.b, _REF.phi
+UNIT_FORCING_REFERENCE = _REF.unit_system
+FORCING_AMPLITUDE = _REF.system.forcing_amplitude
+REFERENCE = _REF.system
+REFERENCE_BUDGET = dict(_REF.budget)
+REFERENCE_SNR = _REF.snr
+BASE_OVERLAP = _REF.base_overlap
+MODE_OVERLAPS = list(_REF.mode_overlaps)
 
 
 def scaled_budget(V_f, factor):
-    return {k: v * factor for k, v in equal_budget(V_f).items()}
+    return config_budget(V_f, scale=factor)
 
 
 def component_budget(V_f, key, factor):
-    budget = equal_budget(V_f)
-    budget[key] *= factor
-    return budget
+    return config_budget(V_f, component=key, factor=factor)
 
 
-def total_snr_sweep(snrs=TOTAL_SNRS, **kwargs):
+def _dataset_kwargs(cfg, kwargs):
+    return {"n_realizations": cfg.n_realizations, "seed": cfg.noise_seed, **kwargs}
+
+
+def total_snr_sweep(snrs=None, cfg=DEFAULT, **kwargs):
+    ref = build_reference(cfg)
     return [
-        make_dataset(REFERENCE, partial(scaled_budget, factor=REFERENCE_SNR / snr),
-                     study="total_snr", param_name="SNR", param_value=snr, **kwargs)
-        for snr in snrs
+        make_dataset(ref.system, partial(config_budget, cfg=cfg, scale=ref.snr / snr),
+                     study="total_snr", param_name="SNR", param_value=snr, **_dataset_kwargs(cfg, kwargs))
+        for snr in (cfg.total_snrs if snrs is None else snrs)
     ]
 
 
-def partial_snr_sweep(component, factors=PARTIAL_SNR_FACTORS, **kwargs):
+def partial_snr_sweep(component, factors=None, cfg=DEFAULT, **kwargs):
     key = PARTIAL_SNR_COMPONENTS[component]
+    ref = build_reference(cfg)
     return [
-        make_dataset(REFERENCE, partial(component_budget, key=key, factor=factor),
+        make_dataset(ref.system, partial(config_budget, cfg=cfg, component=key, factor=factor),
                      study=f"partial_snr_{component}", param_name=f"{component} variance factor",
-                     param_value=factor, **kwargs)
-        for factor in factors
+                     param_value=factor, **_dataset_kwargs(cfg, kwargs))
+        for factor in (cfg.partial_snr_factors if factors is None else factors)
     ]
 
 
-def slow_timescale_sweep(taus_yr=SLOW_TIMESCALES_YR, hold="snr", **kwargs):
+def slow_timescale_sweep(taus_yr=None, hold="snr", cfg=DEFAULT, **kwargs):
     if hold not in SLOW_TIMESCALE_HOLDS:
         raise ValueError(f"hold must be one of {SLOW_TIMESCALE_HOLDS}")
-    budget = equal_budget if hold == "snr" else (lambda V_f: dict(REFERENCE_BUDGET))
+    ref = build_reference(cfg)
+    budget = partial(config_budget, cfg=cfg) if hold == "snr" else partial(_fixed_budget, ref.budget)
     return [
-        make_dataset(replace(REFERENCE, lam1=eigenvalue(12 * tau)), budget,
-                     study=f"slow_timescale_{hold}", param_name=r"$\tau_1$ (yr)", param_value=tau, **kwargs)
-        for tau in taus_yr
+        make_dataset(replace(ref.system, lam1=eigenvalue(12 * tau)), budget,
+                     study=f"slow_timescale_{hold}", param_name=r"$\tau_1$ (yr)", param_value=tau,
+                     **_dataset_kwargs(cfg, kwargs))
+        for tau in (cfg.slow_timescales_yr if taus_yr is None else taus_yr)
     ]
 
 
-def spatial_overlap_sweep(overlaps=MODE_OVERLAPS, **kwargs):
+def _fixed_budget(budget, V_f):
+    return dict(budget)
+
+
+def spatial_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
+    ref = build_reference(cfg)
     datasets = []
-    for overlap in overlaps:
-        W, W_inv = tilt_slow(REFERENCE.W, overlap)
-        datasets.append(make_dataset(replace(REFERENCE, W=W, W_inv=W_inv), equal_budget,
+    for overlap in (ref.mode_overlaps if overlaps is None else overlaps):
+        W, W_inv = tilt_slow(ref.system.W, overlap)
+        datasets.append(make_dataset(replace(ref.system, W=W, W_inv=W_inv), partial(config_budget, cfg=cfg),
                                      study="spatial_overlap", param_name="mode overlap",
-                                     param_value=overlap, **kwargs))
+                                     param_value=overlap, **_dataset_kwargs(cfg, kwargs)))
     return datasets
+
+
+def joint_sweep(snrs=None, taus_yr=None, cfg=DEFAULT, **kwargs):
+    ref = build_reference(cfg)
+    return [
+        make_dataset(replace(ref.system, lam1=eigenvalue(12 * tau)),
+                     partial(config_budget, cfg=cfg, scale=ref.snr / snr),
+                     study="joint_snr_timescale", param_name="SNR", param_value=snr, **_dataset_kwargs(cfg, kwargs))
+        for snr in (cfg.total_snrs if snrs is None else snrs)
+        for tau in (cfg.slow_timescales_yr if taus_yr is None else taus_yr)
+    ]
+
+
+def study_levels(cfg=DEFAULT):
+    """(study, level, one-dataset factory) for every level of every study under cfg."""
+    ref = build_reference(cfg)
+    levels = [("total_snr", v, partial(total_snr_sweep, snrs=[v], cfg=cfg)) for v in cfg.total_snrs]
+    levels += [(f"partial_snr_{c}", v, partial(partial_snr_sweep, c, factors=[v], cfg=cfg))
+               for c in PARTIAL_SNR_COMPONENTS for v in cfg.partial_snr_factors]
+    levels += [(f"slow_timescale_{h}", v, partial(slow_timescale_sweep, taus_yr=[v], hold=h, cfg=cfg))
+               for h in SLOW_TIMESCALE_HOLDS for v in cfg.slow_timescales_yr]
+    levels += [("spatial_overlap", v, partial(spatial_overlap_sweep, overlaps=[v], cfg=cfg)) for v in ref.mode_overlaps]
+    levels += [("joint_snr_timescale", (s, t), partial(joint_sweep, snrs=[s], taus_yr=[t], cfg=cfg))
+               for s in cfg.total_snrs for t in cfg.slow_timescales_yr]
+    return levels
+
+
+def find_level(cfg, study, value):
+    """The dataset factory for one study level; value is matched to within 1e-9 relative (a tuple for joint)."""
+    levels = study_levels(cfg)
+    studies = sorted({s for s, _, _ in levels})
+    if study not in studies:
+        raise KeyError(f"unknown study {study!r}; valid studies: {', '.join(studies)}")
+    candidates = [(v, make) for s, v, make in levels if s == study]
+    for v, make in candidates:
+        if np.shape(v) == np.shape(value) and np.allclose(v, value, rtol=1e-9, atol=1e-12):
+            return make
+    raise KeyError(f"no level {value!r} in {study}; valid levels: {[v for v, _ in candidates]}")

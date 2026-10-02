@@ -17,6 +17,7 @@ from ablations import (
     decay_time,
     equal_budget,
     make_dataset,
+    modal_coordinates,
     run_modal,
 )
 from plot_ablations import annual, lat_label
@@ -42,8 +43,8 @@ def unit_aligned(v, ref):
     return v * np.sign(v @ ref)
 
 
-def fit_pullback(data, long_forcings, short_forcings, transition_time):
-    model = PullbackDMDc(truncation=M, lag=1, transition_time=transition_time)
+def fit_pullback(data, long_forcings, short_forcings, transition_time, lag=1):
+    model = PullbackDMDc(truncation=M, lag=lag, transition_time=transition_time)
     model.fit(data, short_forcings=short_forcings, long_forcings=long_forcings,
               precomputed_eofs={"data_mean": np.zeros(M), "eofs": np.eye(M), "pcs": data})
     model.compute_modes()
@@ -218,7 +219,49 @@ def direct_simulation(ds, seed, n_direct):
     return X.transpose(1, 0, 2)
 
 
-def check_forced_internal_split(spaghetti_path, convergence_path, n_realizations=256, seed=0, n_direct=4):
+def plot_modal_overview(ds, out_path, n_shown):
+    s = ds.system
+    z = modal_coordinates(ds, ds.data)
+    z_forced = modal_coordinates(ds, ds.forced)
+    z_internal = modal_coordinates(ds, ds.internal)
+    taus = decay_time(s.eigvals) / 12
+    names = (rf"slow mode $z_1$ ($\tau_1$={taus[0]:.3g} yr)",
+             rf"pair $z_2$ ($\tau_p$={taus[1]:.3g} yr, period {2 * np.pi / s.theta / 12:.3g} yr)")
+
+    fig, axes = plt.subplots(2, 3, figsize=(14, 6.5))
+    axes[0, 0].plot(np.arange(N) / 12, ds.y[s.spinup:], color="C0")
+    axes[0, 0].set_title("(a) forcing $y(t)$")
+    for k, name in enumerate(names):
+        full, internal = axes[0, k + 1], axes[1, k]
+        for member, member_internal in zip(annual(z[:n_shown, :, k], axis=-1),
+                                           annual(z_internal[:n_shown, :, k], axis=-1)):
+            full.plot(YEARS, member, linewidth=0.7, alpha=0.7)
+            internal.plot(YEARS, member_internal, linewidth=0.7, alpha=0.7)
+        full.plot(YEARS, annual(z[:, :, k].mean(axis=0), axis=-1), color="C0", linestyle="--", linewidth=1.5,
+                  label=f"mean of {len(z)}", zorder=3)
+        full.plot(YEARS, annual(z_forced[:, k], axis=-1), color="k", linewidth=2.5, label="forced", zorder=4)
+        internal.axhline(0, color="k", linewidth=0.8, linestyle="--")
+        internal.sharey(full)
+        full.set_title(f"({'bc'[k]}) {name}")
+        internal.set_title(f"({'de'[k]}) internal variability, {name.split(' (')[0]}")
+        full.legend(fontsize=8)
+
+    for j, name in enumerate((r"$w_1$ slow", r"$w_2$ pair", r"$w_3$ pair")):
+        axes[1, 2].plot(LAT, s.W[:, j], marker="o", label=name)
+    axes[1, 2].plot(LAT, s.b, marker="D", color="k", linestyle="--", label=r"$\hat b$ forcing")
+    axes[1, 2].axhline(0, color="k", linewidth=0.5)
+    axes[1, 2].set_xlabel("latitude (deg)")
+    axes[1, 2].set_title("(f) spatial patterns")
+    axes[1, 2].legend(fontsize=8)
+    for ax in (*axes[0], *axes[1, :2]):
+        ax.set_xlabel("year")
+    fig.suptitle(f"Modal coordinates $z = W^{{-1}}x$, {n_shown} of {len(z)} realizations (annual means), "
+                 f"SNR {ds.snr:.3g}")
+    save(fig, out_path)
+
+
+def check_forced_internal_split(spaghetti_path, convergence_path, modal_path, n_realizations=256, seed=0,
+                                n_direct=4):
     ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations, seed=seed)
     direct = direct_simulation(ds, seed, n_direct)
     direct_err = np.abs(direct - ds.data[:n_direct]).max() / np.abs(direct).max()
@@ -248,6 +291,7 @@ def check_forced_internal_split(spaghetti_path, convergence_path, n_realizations
         axes[-1, col].set_xlabel("year")
     fig.suptitle(f"{n_shown} of {n_realizations} realizations (annual means): full = forced + internal")
     save(fig, spaghetti_path)
+    plot_modal_overview(ds, modal_path, n_shown)
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     axes[0].loglog(counts, mean_errors, marker="o", label="rms|mean_K - forced|")
@@ -371,7 +415,8 @@ def main():
     plot_ensemble_spaghetti(FIGURES_DIR / "ensemble_spaghetti.png")
     check_dmdc_recovery(FIGURES_DIR / "dmdc_recovery_check.png")
     check_forced_internal_split(FIGURES_DIR / "forced_internal_spaghetti.png",
-                                FIGURES_DIR / "forced_internal_convergence.png")
+                                FIGURES_DIR / "forced_internal_convergence.png",
+                                FIGURES_DIR / "modal_overview.png")
     check_forced_internal_recovery(FIGURES_DIR / "forced_internal_recovery.png",
                                    FIGURES_DIR / "forced_internal_recovery_mse.png")
 

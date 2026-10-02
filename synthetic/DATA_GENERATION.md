@@ -95,7 +95,7 @@ The forcing enters at the target time, which matches `PullbackDMDc` ($x_t=Ax_{t-
 | `plot_system_check` | `system_check.png` | eigenvectors of $A$: slow $\parallel w_1$, pair $=c(w_2+iw_3)$ (1e-10) |
 | `plot_ensemble_spaghetti` | `ensemble_spaghetti.png` | none (10 realizations + forced, annual means) |
 | `check_dmdc_recovery` | `dmdc_recovery_check.png` | noise-free, white $y$: PullbackDMDc recovers $\lambda_1$, $\rho e^{i\theta}$, $\hat b$, $w_1$ and the plane $\operatorname{span}(w_2,w_3)$ (1e-8) |
-| `check_forced_internal_split` | `forced_internal_spaghetti.png`, `forced_internal_convergence.png` | modal simulator equals a direct $x$-space simulation of the model (1e-9 relative); ensemble mean $\to$ forced at slope $<-0.4$ |
+| `check_forced_internal_split` | `forced_internal_spaghetti.png`, `forced_internal_convergence.png`, `modal_overview.png` | modal simulator equals a direct $x$-space simulation of the model (1e-9 relative); ensemble mean $\to$ forced at slope $<-0.4$. `modal_overview.png` (no asserts) shows the same 10 realizations in modal coordinates: forcing, $z_1$ and $z_2$ (full and internal only), patterns |
 | `check_forced_internal_recovery` | `forced_internal_recovery.png`, `forced_internal_recovery_mse.png` | starting point only (SNR 1/3, 100 realizations): mirrored errors asserted; skill (correlation, errors, slow eigenvalue) reported, not asserted |
 
 The recovery check also prints an oracle: the true $A,\hat b$ run over the same 100-yr history. That is the floor set by truncating the history ($\approx1\%$ at the starting point).
