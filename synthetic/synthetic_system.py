@@ -5,12 +5,22 @@ import numpy as np
 def lat_grid(n=20):
     return np.linspace(-np.pi / 2, np.pi / 2, n)          # radians, poles included
 
+# Zonal-mean CO2 radiative forcing (W m^-2) at |latitude| = 0, 5, ..., 90 deg, digitized from the red CO2 curve
+# of figures/reference/co2_zonal_forcing.png (clear-sky tropopause forcing, 1750-2005, hemispherically
+# symmetric atmosphere); the north and south branches agree to 0.003 W m^-2 and are averaged.
+CO2_ZONAL_LATS = np.arange(0, 91, 5)
+CO2_ZONAL_FORCING = np.array([2.498, 2.498, 2.484, 2.470, 2.437, 2.395, 2.339, 2.274, 2.186, 2.078,
+                              2.012, 1.950, 1.880, 1.801, 1.720, 1.646, 1.590, 1.556, 1.544])
+
+def co2_forcing_pattern(phi):
+    return np.interp(np.abs(np.rad2deg(phi)), CO2_ZONAL_LATS, CO2_ZONAL_FORCING)
+
 def raw_patterns(n=20):
     phi = lat_grid(n)
     slow  = np.cos(phi - np.pi / 4)
     fast1 = np.sinc(2 * phi)
     fast2 = (0.5 - np.cos(10 * phi)) / (0.5 + np.abs(10 * phi))
-    b     = 1.2 - np.cos(phi)
+    b     = co2_forcing_pattern(phi)
     return phi, slow, fast1, fast2, b
 
 def make_W(n=20, seed=22):
@@ -53,7 +63,7 @@ def fig_patterns(P, lat, path):
         (r"slow mode ($\mathbf{w}_1$)",   "#0072B2", "o", "-"),
         (r"fast mode 1 ($\mathbf{w}_2$)", "#D55E00", "s", "-"),
         (r"fast mode 2 ($\mathbf{w}_3$)", "#009E73", "^", "-"),
-        (r"forcing pattern ($B$)",        "#222222", "D", (0, (3, 1.6))),
+        (r"CO$_2$ forcing pattern ($B$)", "#222222", "D", (0, (3, 1.6))),
     ]
     fig, ax = plt.subplots(figsize=(3.5, 2.7))
     ax.axhline(0, color="0.55", lw=0.6, zorder=1)

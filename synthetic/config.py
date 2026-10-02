@@ -28,6 +28,9 @@ class Config:
     complement_variance: float = 1.0  # sc^2 = complement_variance * V_f / 17 per complement mode
     forced_variance: float = 20.0  # V_f of the reference forced response (= M); sets the overall scale
 
+    # --- forcing: AR6 CO2 ERF in time (data_preparation/AR6_ERF_1750-2019.csv), CO2 zonal pattern in space ---
+    record_end_year: int = 2014  # the 100-yr record ends in December of this year (1915-2014)
+
     # --- seeds and forcing history ----------------------------------------------------------
     pattern_seed: int = 22
     eigenvalue_seed: int = 20

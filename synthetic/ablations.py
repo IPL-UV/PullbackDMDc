@@ -4,13 +4,20 @@ Every tunable value lives in config.Config; the module-level constants below are
 kept so existing scripts can import them.
 """
 
+import pathlib
+import sys
 from dataclasses import dataclass, replace
 from functools import lru_cache, partial
 from typing import Tuple
 
 import numpy as np
+import pandas as pd
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from config import DEFAULT
+from data_preparation.interpolate_full_forcing import interpolate
 from synthetic_system import make_W
 
 M = 20
@@ -22,6 +29,9 @@ PARTIAL_SNR_COMPONENTS = dict(slow="s1_sq", pair="sp_sq", complement="sc_sq")
 SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 
 HISTORY = DEFAULT.history
+RECORD_END_YEAR = DEFAULT.record_end_year
+AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
+TREND_YEARS = 10  # forcing after the data continues at the trend of its last TREND_YEARS years
 N_REALIZATIONS = DEFAULT.n_realizations
 PATTERN_SEED = DEFAULT.pattern_seed
 EIGENVALUE_SEED = DEFAULT.eigenvalue_seed
@@ -56,6 +66,7 @@ class System:
     sp_sq: float = np.nan
     sc_sq: float = np.nan
     history: int = HISTORY
+    record_end_year: int = RECORD_END_YEAR
 
     @property
     def Lambda_R(self):
@@ -92,12 +103,33 @@ class System:
         return max(self.noise_spinup, self.history)
 
 
-def forcing_F(t_yr):
-    return (t_yr - 9 * np.tanh(0.1 * t_yr - 4.5) + 0.25 * np.exp(0.05 * t_yr)) / 30
+@lru_cache(maxsize=None)
+def co2_monthly():
+    """AR6 CO2 ERF (W m^-2) interpolated to months as for the real data: (fractional years, values, end slope / yr)."""
+    annual = pd.read_csv(AR6_ERF_PATH)[["year", "co2"]]
+    monthly = interpolate(annual)
+    time = pd.to_datetime(monthly["time"])
+    t = (time.dt.year + (time.dt.month - 1) / 12).to_numpy()
+    co2 = annual.set_index("year")["co2"]
+    end = co2.index.max()
+    slope = (co2[end] - co2[end - TREND_YEARS + 1]) / (TREND_YEARS - 1)
+    return t, monthly["co2"].to_numpy(), slope
+
+
+def co2_forcing(t_yr):
+    """Monthly CO2 ERF at fractional years: held at its first value before the data, linear trend after it."""
+    t, co2, slope = co2_monthly()
+    t_yr = np.asarray(t_yr, dtype=float)
+    return np.where(t_yr > t[-1], co2[-1] + slope * (t_yr - t[-1]), np.interp(t_yr, t, co2))
+
+
+def record_years(system):
+    """Fractional years of record months 0..N-1 (the record ends in December of record_end_year)."""
+    return system.record_end_year - N // 12 + 1 + np.arange(N) / 12
 
 
 def forcing_series(system):
-    F = forcing_F(np.arange(-system.spinup, N) / 12)
+    F = co2_forcing(record_years(system)[0] + np.arange(-system.spinup, N) / 12)
     # centered on the record; the same offset is kept during spin-up
     return system.forcing_amplitude * (F - F[system.spinup:].mean())
 
@@ -237,7 +269,7 @@ def build_reference(cfg=DEFAULT):
         W=W, W_inv=W_inv, b=b,
         lam1=eigenvalue(12 * cfg.tau1_yr), rho=eigenvalue(12 * cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
         lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
-        history=cfg.history,
+        history=cfg.history, record_end_year=cfg.record_end_year,
     )
     amplitude = np.sqrt(cfg.forced_variance / forced_variance(forced_response(unit)[1]))
     budget = config_budget(cfg.forced_variance, cfg)

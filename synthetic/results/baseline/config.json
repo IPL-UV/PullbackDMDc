@@ -10,6 +10,7 @@
   "pair_variance": 1.0,
   "complement_variance": 1.0,
   "forced_variance": 20.0,
+  "record_end_year": 2014,
   "pattern_seed": 22,
   "eigenvalue_seed": 20,
   "noise_seed": 0,

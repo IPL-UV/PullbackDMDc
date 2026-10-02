@@ -51,7 +51,7 @@ def test_patterns():
     assert np.abs(W_REF[:, :3].T @ W_REF[:, 3:]).max() < 1e-12
     gram = np.column_stack([W_REF[:, :3], B_HAT])
     gram = gram.T @ gram
-    expected = {(0, 1): 0.396, (0, 2): 0.329, (1, 2): 0.278, (3, 0): 0.365, (3, 1): 0.142, (3, 2): 0.309}
+    expected = {(0, 1): 0.396, (0, 2): 0.329, (1, 2): 0.278, (3, 0): 0.650, (3, 1): 0.489, (3, 2): 0.478}
     for (i, j), value in expected.items():
         assert abs(gram[i, j] - value) < 5e-4, (i, j, gram[i, j])
 
@@ -103,9 +103,9 @@ def test_spinup():
 def test_forced_variance_scale():
     V_f = forced_variance(forced_response(UNIT_FORCING_REFERENCE)[1])
     fast = replace(UNIT_FORCING_REFERENCE, lam1=eigenvalue(12 * 0.84))
-    print(f"    unit-forcing V_f: {V_f:.4g} at tau_1 = 20 yr (tex ~4.4e3), "
-          f"{forced_variance(forced_response(fast)[1]):.4g} at 0.84 yr (tex ~17)")
-    assert abs(V_f / 4.4e3 - 1) < 0.2
+    V_f_fast = forced_variance(forced_response(fast)[1])
+    print(f"    unit-forcing V_f: {V_f:.4g} at tau_1 = 20 yr, {V_f_fast:.4g} at 0.84 yr (AR6 CO2, 1915-2014)")
+    assert abs(V_f / 1.284e3 - 1) < 1e-3 and abs(V_f_fast / 7.234 - 1) < 1e-3
     assert abs(forced_variance(forced_response(REFERENCE)[1]) - 20) < 1e-9
 
 

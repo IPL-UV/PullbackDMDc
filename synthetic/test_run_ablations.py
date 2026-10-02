@@ -6,8 +6,11 @@ from functools import partial
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 
 from ablations import (
+    AR6_ERF_PATH,
+    B_HAT,
     FORCING_AMPLITUDE,
     M,
     N,
@@ -18,6 +21,7 @@ from ablations import (
     TOTAL_SNRS,
     SLOW_TIMESCALES_YR,
     build_reference,
+    co2_forcing,
     decay_time,
     eigenvalue,
     empirical_snr,
@@ -33,6 +37,8 @@ from ablations import (
     study_levels,
     total_snr_sweep,
 )
+from data_preparation.interpolate_full_forcing import interpolate
+from synthetic_system import CO2_ZONAL_FORCING, co2_forcing_pattern, lat_grid
 from config import DEFAULT, Config, config_diff, from_json, slug, to_json, with_overrides
 from methods import fit_lim, fit_lim_opt, fit_pullback_dmdc, make_methods
 from plot_system import plot_ensemble_super_spaghetti, reference_dataset
@@ -101,6 +107,44 @@ def test_history_override():
     (base,) = total_snr_sweep(snrs=[1], cfg=with_overrides(DEFAULT, ["tau1_yr=1"]), **SMALL)
     assert np.all(ds.internal == base.internal) and np.abs(ds.forced - base.forced).max() < 1e-12
     assert np.all(ds.y[-N:] == base.y[-N:])
+
+
+def test_record_forcing_is_ar6_co2():
+    # the record is the monthly AR6 CO2 ERF for Jan 1915 - Dec 2014, up to the centering and the amplitude
+    monthly = interpolate(pd.read_csv(AR6_ERF_PATH)[["year", "co2"]])
+    co2 = monthly.loc[monthly.time.between("1915-01-01", "2014-12-01"), "co2"].to_numpy()
+    assert len(co2) == N
+    ds = make_dataset(REFERENCE, equal_budget, n_realizations=1)
+    y = ds.y[REFERENCE.spinup:]
+    expected = FORCING_AMPLITUDE * (co2 - co2.mean())
+    assert np.abs(y - expected).max() < 1e-12 * np.abs(expected).max()
+
+
+def test_forcing_extrapolation():
+    annual = pd.read_csv(AR6_ERF_PATH).set_index("year")["co2"]
+    early = co2_forcing(np.array([0.0, 1000.0, 1700.0, 1750.5]))
+    assert np.all(early == early[0]) and abs(early[0]) < 1e-3
+    slope = (annual[2019] - annual[2010]) / 9
+    late = co2_forcing(np.array([2019.5, 2025.0, 2030.0]))
+    monthly = interpolate(pd.read_csv(AR6_ERF_PATH)[["year", "co2"]])
+    assert monthly.time.iloc[-1] == "2019-07-01" and abs(late[0] - monthly.co2.iloc[-1]) < 1e-12  # continuous
+    assert np.allclose(np.diff(late) / np.array([5.5, 5.0]), slope, atol=1e-12) and abs(slope - 0.0336) < 1e-3
+    # a record past the data uses the extrapolation, and stays continuous
+    cfg = with_overrides(DEFAULT, ["record_end_year=2030"])
+    ds = make_dataset(build_reference(cfg).system, equal_budget, n_realizations=1)
+    y = ds.y[ds.system.spinup:]
+    assert np.abs(np.diff(y)).max() < 1.5 * np.abs(np.diff(y[:-200])).max()
+    assert np.allclose(np.diff(y[-120:]), np.diff(y[-120:])[0], rtol=1e-9)
+
+
+def test_co2_forcing_pattern():
+    b = B_HAT
+    assert np.all(b > 0) and np.allclose(b, b[::-1], atol=1e-12)
+    assert np.argmax(b) in (M // 2 - 1, M // 2)
+    ratio = CO2_ZONAL_FORCING[0] / CO2_ZONAL_FORCING[-1]
+    assert abs(ratio / (2.50 / 1.54) - 1) < 0.02, ratio
+    raw = co2_forcing_pattern(lat_grid(M))
+    assert np.allclose(b, raw / np.linalg.norm(raw), atol=1e-15)
 
 
 def test_config_json_roundtrip():
