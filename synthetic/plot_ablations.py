@@ -1,10 +1,11 @@
-"""Diagnostic plots for the ablation datasets (ablations.py), written to figures/ablations/."""
+"""Diagnostic plots for the ablation datasets (ablations.py), written to figures/diagnostics/data/."""
 
 import pathlib
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+import plot_style  # noqa: F401  (sets the shared rcParams)
 from ablations import (
     BASE_OVERLAP,
     N,
@@ -24,7 +25,7 @@ from ablations import (
     total_snr_sweep,
 )
 
-FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "ablations"
+FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "diagnostics" / "data"
 
 N_REALIZATIONS = 10
 CALIBRATION_LATS = (18, 14, 10, 4)  # 81N, 43N, 5N, 52S

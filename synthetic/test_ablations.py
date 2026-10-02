@@ -104,8 +104,8 @@ def test_forced_variance_scale():
     V_f = forced_variance(forced_response(UNIT_FORCING_REFERENCE)[1])
     fast = replace(UNIT_FORCING_REFERENCE, lam1=eigenvalue(12 * 0.84))
     V_f_fast = forced_variance(forced_response(fast)[1])
-    print(f"    unit-forcing V_f: {V_f:.4g} at tau_1 = 20 yr, {V_f_fast:.4g} at 0.84 yr (AR6 CO2, 1915-2014)")
-    assert abs(V_f / 1.284e3 - 1) < 1e-3 and abs(V_f_fast / 7.234 - 1) < 1e-3
+    print(f"    unit-forcing V_f: {V_f:.4g} at tau_1 = 20 yr, {V_f_fast:.4g} at 0.84 yr (CO2 forcing model, 1915-2014)")
+    assert abs(V_f / 1.477e3 - 1) < 1e-3 and abs(V_f_fast / 7.376 - 1) < 1e-3
     assert abs(forced_variance(forced_response(REFERENCE)[1]) - 20) < 1e-9
 
 

@@ -3,6 +3,9 @@
 Override from the command line with `--set key=value ...`, e.g.
     python run_ablations.py --name slow50 --set tau1_yr=50 slow_variance=0.5
     python plot_system.py --set tau_p_yr=5 period_p_yr=8
+    python run_ablations.py --name ar6 --set forcing_source=file                     # AR6 CO2 from the default file
+    python run_ablations.py --name gauss --set forcing_source=analytic_gauss         # exp + two Gaussians fit
+    python run_ablations.py --name total --set forcing_source=file forcing_column=total forcing_file=/abs/forcing.csv
 
 Grid size M = 20 and record length N = 1200 months are structural and stay fixed in ablations.py.
 """
@@ -28,8 +31,17 @@ class Config:
     complement_variance: float = 1.0  # sc^2 = complement_variance * V_f / 17 per complement mode
     forced_variance: float = 20.0  # V_f of the reference forced response (= M); sets the overall scale
 
-    # --- forcing: AR6 CO2 ERF in time (data_preparation/AR6_ERF_1750-2019.csv), CO2 zonal pattern in space ---
+    # --- forcing in time (CO2 zonal pattern in space) ----------------------------------------
+    # "analytic": c + a exp((t - 2014) / forcing_efold_yr), fitted to the AR6 CO2 ERF (forcing_file/column ignored)
+    # "analytic_gauss": the exp plus a positive and a negative Gaussian, all fitted jointly to the AR6 CO2 ERF
+    #         (forcing_efold_yr and forcing_file/column ignored)
+    # "file": column forcing_column of forcing_file, an annual CSV with a `year` column or a monthly CSV with a
+    #         `time` column (YYYY-MM-01); a relative path is relative to the repo root (forcing_efold_yr ignored)
+    forcing_source: str = "analytic"
+    forcing_file: str = "data_preparation/AR6_ERF_1750-2019.csv"
+    forcing_column: str = "co2"
     record_end_year: int = 2014  # the 100-yr record ends in December of this year (1915-2014)
+    forcing_efold_yr: float = 100 / 1.6709321713250902  # ~59.8 yr; e-folding time of the forcing ramp
 
     # --- seeds and forcing history ----------------------------------------------------------
     pattern_seed: int = 22

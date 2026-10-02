@@ -23,7 +23,7 @@ from ablations import (
 from plot_ablations import annual, lat_label
 from utils.pullback_dmdc import PullbackDMDc
 
-FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures"
+FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "tests"
 
 ENSEMBLE_STATE_INDICES = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
 LAT = np.rad2deg(PHI)
@@ -410,7 +410,7 @@ def check_forced_internal_recovery(spaghetti_path, mse_path, n_realizations=100,
 
 
 def main():
-    FIGURES_DIR.mkdir(exist_ok=True)
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     plot_system_check(FIGURES_DIR / "system_check.png")
     plot_ensemble_spaghetti(FIGURES_DIR / "ensemble_spaghetti.png")
     check_dmdc_recovery(FIGURES_DIR / "dmdc_recovery_check.png")

@@ -19,6 +19,7 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+import plot_style  # noqa: F401  (sets the shared rcParams)
 from config import Config, config_diff, from_json
 from plot_system import RESULTS_DIR
 from utils.params import colors, method_markers
@@ -190,7 +191,7 @@ def plot_phase(run, path):
         vmax = min(values.max(), 2) if vmax is None else vmax
         for ax, method in zip(row, run.methods):
             corr, rmse = (phase_grid(df[df.method == method], m) for m in ("forced_corr", "forced_rel_rmse"))
-            mesh = ax.pcolormesh(grids[method].values, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=True)
+            mesh = ax.pcolormesh(grids[method].values, cmap=cmap, vmin=vmin, vmax=vmax)
             centers = label_phase_axes(ax, grids[method], method)
             ax.contour(*centers, corr.values, levels=[0.9], colors="k", linewidths=1.2)
             ax.contour(*centers, rmse.values, levels=[RMSE_THRESHOLD], colors="k", linewidths=1.2, linestyles="--")
@@ -215,7 +216,7 @@ def plot_phase_change(reference, variant, path):
                   for m in methods}
         limit = np.nanmax([np.abs(d.values).max() for d in deltas.values()]) or 1.0
         for ax, method in zip(row, methods):
-            mesh = ax.pcolormesh(deltas[method].values, cmap=cmap, vmin=-limit, vmax=limit, rasterized=True)
+            mesh = ax.pcolormesh(deltas[method].values, cmap=cmap, vmin=-limit, vmax=limit)
             label_phase_axes(ax, deltas[method], method)
         row[0].set_ylabel("SNR")
         fig.colorbar(mesh, ax=row, label=f"change in {title}", fraction=0.03, pad=0.02)
@@ -226,7 +227,7 @@ def plot_phase_change(reference, variant, path):
 
 
 def save(fig, path):
-    fig.savefig(path, bbox_inches="tight", dpi=200)
+    fig.savefig(path, bbox_inches="tight", dpi=150)
     plt.close(fig)
     print(f"saved {path}")
 
@@ -239,11 +240,11 @@ def main():
     runs = [load_run(name) for name in args.runs]
     out_dir = FIGURES_DIR / (runs[0].name if len(runs) == 1 else "compare_" + "_vs_".join(r.name for r in runs))
     out_dir.mkdir(parents=True, exist_ok=True)
-    plot_sweeps(runs, out_dir / "results_sweeps.pdf")
+    plot_sweeps(runs, out_dir / "results_sweeps.png")
     for run in runs:
-        plot_phase(run, out_dir / f"results_phase_snr_timescale_{run.name}.pdf")
+        plot_phase(run, out_dir / f"results_phase_snr_timescale_{run.name}.png")
     if len(runs) == 2:
-        plot_phase_change(*runs, out_dir / "results_phase_change.pdf")
+        plot_phase_change(*runs, out_dir / "results_phase_change.png")
 
 
 if __name__ == "__main__":

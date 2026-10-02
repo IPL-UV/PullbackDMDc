@@ -31,7 +31,19 @@ SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 HISTORY = DEFAULT.history
 RECORD_END_YEAR = DEFAULT.record_end_year
 AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
-TREND_YEARS = 10  # forcing after the data continues at the trend of its last TREND_YEARS years
+# F(t) = c + a exp((t - 2014) / efold) least-squares fitted to the annual AR6 CO2 ERF, 1750-2019 (values at
+# mid-year); efold = 100 / k yr. RMSE 0.038 W m^-2 (0.056 over 1915-2014). Constant c in the past.
+CO2_FIT = dict(c=0.019123072547470428, a=1.9152644964970247, k=1.6709321713250902)
+CO2_FIT_REFERENCE_YEAR = 2014
+FORCING_EFOLD_YR = DEFAULT.forcing_efold_yr
+# exp + one positive and one negative Gaussian, least-squares fitted to the same AR6 CO2 values: RMSE 0.0092 W m^-2
+# (0.0101 over 1915-2014), against 0.038 (0.055) for the plain exp; the Gaussians capture the bump near 1921 and the
+# dip near 1966. Constant c in the past (|F - c| < 3e-4 of the rise before 1500).
+CO2_GAUSS_FIT = dict(c=-0.005366940477657721, a=1.9642341976276356, k=1.5819078313533055,
+                     A_pos=0.04816339012920922, mu_pos=1921.3285060598805, sigma_pos=17.8812620771011,
+                     A_neg=0.13721889229450532, mu_neg=1966.0271283481388, sigma_neg=14.114214602524019)
+FORCING_SOURCES = ("analytic", "analytic_gauss", "file")
+FILE_TREND_YEARS = 10  # after a forcing file's data ends, the forcing continues its trend over these last years
 N_REALIZATIONS = DEFAULT.n_realizations
 PATTERN_SEED = DEFAULT.pattern_seed
 EIGENVALUE_SEED = DEFAULT.eigenvalue_seed
@@ -67,6 +79,10 @@ class System:
     sc_sq: float = np.nan
     history: int = HISTORY
     record_end_year: int = RECORD_END_YEAR
+    forcing_efold_yr: float = FORCING_EFOLD_YR
+    forcing_source: str = DEFAULT.forcing_source
+    forcing_file: str = DEFAULT.forcing_file
+    forcing_column: str = DEFAULT.forcing_column
 
     @property
     def Lambda_R(self):
@@ -103,24 +119,69 @@ class System:
         return max(self.noise_spinup, self.history)
 
 
+def resolve_forcing_path(path):
+    path = pathlib.Path(path)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
 @lru_cache(maxsize=None)
-def co2_monthly():
-    """AR6 CO2 ERF (W m^-2) interpolated to months as for the real data: (fractional years, values, end slope / yr)."""
-    annual = pd.read_csv(AR6_ERF_PATH)[["year", "co2"]]
-    monthly = interpolate(annual)
-    time = pd.to_datetime(monthly["time"])
+def load_forcing_file(path, column):
+    """Monthly forcing from a CSV: (fractional years, values).
+
+    An annual file (a `year` column, like AR6_ERF_1750-2019.csv) is interpolated to months as for the real data;
+    a monthly file (a `time` column, YYYY-MM-01, like interpolatedAllForcing.csv) is used as is.
+    """
+    resolved = resolve_forcing_path(path)
+    if not resolved.is_file():
+        raise FileNotFoundError(f"forcing file {path!r} not found (resolved to {resolved})")
+    df = pd.read_csv(resolved)
+    if column not in df.columns:
+        available = [c for c in df.columns if c not in ("year", "time") and not c.startswith("Unnamed")]
+        raise KeyError(f"forcing column {column!r} not in {resolved}; available: {', '.join(available)}")
+    if "year" in df.columns:
+        df = interpolate(df[["year", column]])
+    elif "time" not in df.columns:
+        raise ValueError(f"forcing file {resolved} needs a `year` (annual) or `time` (monthly, YYYY-MM-01) column")
+    df = df.dropna(subset=[column])
+    time = pd.to_datetime(df["time"])
     t = (time.dt.year + (time.dt.month - 1) / 12).to_numpy()
-    co2 = annual.set_index("year")["co2"]
-    end = co2.index.max()
-    slope = (co2[end] - co2[end - TREND_YEARS + 1]) / (TREND_YEARS - 1)
-    return t, monthly["co2"].to_numpy(), slope
+    order = np.argsort(t, kind="stable")
+    return t[order], df[column].to_numpy(dtype=float)[order]
 
 
-def co2_forcing(t_yr):
-    """Monthly CO2 ERF at fractional years: held at its first value before the data, linear trend after it."""
-    t, co2, slope = co2_monthly()
+def file_forcing(t_yr, path, column):
+    """File forcing at fractional years: held at its first value before the data, the last
+    FILE_TREND_YEARS' linear trend after it."""
+    t, values = load_forcing_file(path, column)
+    slope = (values[-1] - np.interp(t[-1] - FILE_TREND_YEARS, t, values)) / FILE_TREND_YEARS
     t_yr = np.asarray(t_yr, dtype=float)
-    return np.where(t_yr > t[-1], co2[-1] + slope * (t_yr - t[-1]), np.interp(t_yr, t, co2))
+    return np.where(t_yr > t[-1], values[-1] + slope * (t_yr - t[-1]), np.interp(t_yr, t, values))
+
+
+def co2_monthly():
+    """AR6 CO2 ERF (W m^-2) interpolated to months as for the real data, for comparison with the model."""
+    return load_forcing_file(str(AR6_ERF_PATH), "co2")
+
+
+def co2_forcing_model(t_yr, efold_yr=FORCING_EFOLD_YR):
+    """Analytic CO2 forcing (W m^-2) at fractional years: the AR6 fit c + a exp((t - 2014) / efold_yr)."""
+    return CO2_FIT["c"] + CO2_FIT["a"] * np.exp((np.asarray(t_yr, dtype=float) - CO2_FIT_REFERENCE_YEAR) / efold_yr)
+
+
+def gaussian(t, A, mu, sigma):
+    return A * np.exp(-0.5 * ((t - mu) / sigma) ** 2)
+
+
+def exp_gauss_model(t, c, a, k, A_pos, mu_pos, sigma_pos, A_neg, mu_neg, sigma_neg):
+    """c + a exp(k (t - 2014) / 100) plus a positive and minus a negative Gaussian (A_pos, A_neg >= 0)."""
+    t = np.asarray(t, dtype=float)
+    return (c + a * np.exp(k * (t - CO2_FIT_REFERENCE_YEAR) / 100)
+            + gaussian(t, A_pos, mu_pos, sigma_pos) - gaussian(t, A_neg, mu_neg, sigma_neg))
+
+
+def co2_forcing_gauss_model(t_yr):
+    """Analytic CO2 forcing (W m^-2) at fractional years: the AR6 fit of exp_gauss_model."""
+    return exp_gauss_model(t_yr, **CO2_GAUSS_FIT)
 
 
 def record_years(system):
@@ -128,8 +189,19 @@ def record_years(system):
     return system.record_end_year - N // 12 + 1 + np.arange(N) / 12
 
 
+def forcing_values(system, t_yr):
+    """The system's forcing F (W m^-2) at fractional years, from its forcing_source."""
+    if system.forcing_source == "analytic":
+        return co2_forcing_model(t_yr, system.forcing_efold_yr)
+    if system.forcing_source == "analytic_gauss":
+        return co2_forcing_gauss_model(t_yr)
+    if system.forcing_source == "file":
+        return file_forcing(t_yr, system.forcing_file, system.forcing_column)
+    raise ValueError(f"unknown forcing_source {system.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
+
+
 def forcing_series(system):
-    F = co2_forcing(record_years(system)[0] + np.arange(-system.spinup, N) / 12)
+    F = forcing_values(system, record_years(system)[0] + np.arange(-system.spinup, N) / 12)
     # centered on the record; the same offset is kept during spin-up
     return system.forcing_amplitude * (F - F[system.spinup:].mean())
 
@@ -264,12 +336,15 @@ class Reference:
 
 @lru_cache(maxsize=None)
 def build_reference(cfg=DEFAULT):
+    if cfg.forcing_source not in FORCING_SOURCES:
+        raise ValueError(f"unknown forcing_source {cfg.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
     W, W_inv, b, phi = make_W(M, cfg.pattern_seed)
     unit = System(
         W=W, W_inv=W_inv, b=b,
         lam1=eigenvalue(12 * cfg.tau1_yr), rho=eigenvalue(12 * cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
         lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
-        history=cfg.history, record_end_year=cfg.record_end_year,
+        history=cfg.history, record_end_year=cfg.record_end_year, forcing_efold_yr=cfg.forcing_efold_yr,
+        forcing_source=cfg.forcing_source, forcing_file=cfg.forcing_file, forcing_column=cfg.forcing_column,
     )
     amplitude = np.sqrt(cfg.forced_variance / forced_variance(forced_response(unit)[1]))
     budget = config_budget(cfg.forced_variance, cfg)

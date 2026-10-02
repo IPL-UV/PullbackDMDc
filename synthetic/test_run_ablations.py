@@ -11,6 +11,7 @@ import pandas as pd
 from ablations import (
     AR6_ERF_PATH,
     B_HAT,
+    FILE_TREND_YEARS,
     FORCING_AMPLITUDE,
     M,
     N,
@@ -21,14 +22,21 @@ from ablations import (
     TOTAL_SNRS,
     SLOW_TIMESCALES_YR,
     build_reference,
-    co2_forcing,
+    CO2_FIT,
+    CO2_GAUSS_FIT,
+    co2_forcing_gauss_model,
+    co2_forcing_model,
+    co2_monthly,
     decay_time,
     eigenvalue,
     empirical_snr,
+    exp_gauss_model,
     equal_budget,
+    file_forcing,
     find_level,
     forced_variance,
     joint_sweep,
+    load_forcing_file,
     make_dataset,
     modal_coordinates,
     partial_snr_sweep,
@@ -38,9 +46,11 @@ from ablations import (
     total_snr_sweep,
 )
 from data_preparation.interpolate_full_forcing import interpolate
+from scipy.optimize import curve_fit
 from synthetic_system import CO2_ZONAL_FORCING, co2_forcing_pattern, lat_grid
 from config import DEFAULT, Config, config_diff, from_json, slug, to_json, with_overrides
 from methods import fit_lim, fit_lim_opt, fit_pullback_dmdc, make_methods
+from compare_forcings import forced_datasets, plot_forced_response_comparison, plot_forcing_comparison
 from plot_system import plot_ensemble_super_spaghetti, reference_dataset
 from run_ablations import run_level, score
 from test import recovery_metrics
@@ -109,32 +119,45 @@ def test_history_override():
     assert np.all(ds.y[-N:] == base.y[-N:])
 
 
-def test_record_forcing_is_ar6_co2():
-    # the record is the monthly AR6 CO2 ERF for Jan 1915 - Dec 2014, up to the centering and the amplitude
-    monthly = interpolate(pd.read_csv(AR6_ERF_PATH)[["year", "co2"]])
-    co2 = monthly.loc[monthly.time.between("1915-01-01", "2014-12-01"), "co2"].to_numpy()
-    assert len(co2) == N
+def test_forcing_fit():
+    annual = pd.read_csv(AR6_ERF_PATH)
+    t, y = annual.year.to_numpy() + 6.5 / 12, annual.co2.to_numpy()
+    model = lambda t, c, a, k: c + a * np.exp(k * (t - 2014) / 100)
+    p, _ = curve_fit(model, t, y, p0=[0, 2, 2], maxfev=100000)
+    assert np.allclose(p, [CO2_FIT["c"], CO2_FIT["a"], CO2_FIT["k"]], rtol=1e-6, atol=0), p
+    assert abs(DEFAULT.forcing_efold_yr - 100 / CO2_FIT["k"]) < 1e-12
+    t_month, co2 = co2_monthly()
+    residual = co2_forcing_model(t_month) - co2
+    record = (t_month >= 1915) & (t_month < 2015)
+    assert np.sqrt((residual**2).mean()) < 0.04 and np.sqrt((residual[record] ** 2).mean()) < 0.06
+    # the record forcing is the model, up to the centering and the amplitude
     ds = make_dataset(REFERENCE, equal_budget, n_realizations=1)
-    y = ds.y[REFERENCE.spinup:]
-    expected = FORCING_AMPLITUDE * (co2 - co2.mean())
-    assert np.abs(y - expected).max() < 1e-12 * np.abs(expected).max()
+    F = co2_forcing_model(1915 + np.arange(N) / 12)
+    expected = FORCING_AMPLITUDE * (F - F.mean())
+    assert np.abs(ds.y[REFERENCE.spinup:] - expected).max() < 1e-12 * np.abs(expected).max()
 
 
-def test_forcing_extrapolation():
-    annual = pd.read_csv(AR6_ERF_PATH).set_index("year")["co2"]
-    early = co2_forcing(np.array([0.0, 1000.0, 1700.0, 1750.5]))
-    assert np.all(early == early[0]) and abs(early[0]) < 1e-3
-    slope = (annual[2019] - annual[2010]) / 9
-    late = co2_forcing(np.array([2019.5, 2025.0, 2030.0]))
-    monthly = interpolate(pd.read_csv(AR6_ERF_PATH)[["year", "co2"]])
-    assert monthly.time.iloc[-1] == "2019-07-01" and abs(late[0] - monthly.co2.iloc[-1]) < 1e-12  # continuous
-    assert np.allclose(np.diff(late) / np.array([5.5, 5.0]), slope, atol=1e-12) and abs(slope - 0.0336) < 1e-3
-    # a record past the data uses the extrapolation, and stays continuous
-    cfg = with_overrides(DEFAULT, ["record_end_year=2030"])
-    ds = make_dataset(build_reference(cfg).system, equal_budget, n_realizations=1)
-    y = ds.y[ds.system.spinup:]
-    assert np.abs(np.diff(y)).max() < 1.5 * np.abs(np.diff(y[:-200])).max()
-    assert np.allclose(np.diff(y[-120:]), np.diff(y[-120:])[0], rtol=1e-9)
+def test_forcing_past_constant():
+    past = co2_forcing_model(np.linspace(-3000, 1600, 5000))
+    assert np.abs(past - CO2_FIT["c"]).max() / (co2_forcing_model(2014) - CO2_FIT["c"]) < 1e-3
+    # the longest spin-up (tau_1 = 100 yr): the forced response sits still for millennia before the record
+    (ds,) = find_level(DEFAULT, "slow_timescale_snr", 100)(n_realizations=1)
+    s = ds.system
+    z1 = run_modal(s.Lambda_R, np.outer(ds.y, s.W_inv @ s.b))[:, 0]  # forced slow mode, from the zero start
+    assert s.spinup >= 4000 * 12, s.spinup
+    # once the zero start has decayed (10 tau_1 = 1000 yr) it sits still: spin-up years 1000-3000 (~1085 BC - 915 AD)
+    settled = z1[1000 * 12: 3000 * 12]
+    assert np.ptp(settled) < 1e-3 * np.ptp(z1[s.spinup:]), (np.ptp(settled), np.ptp(z1[s.spinup:]))
+
+
+def test_forcing_efold_override():
+    cfg = with_overrides(DEFAULT, ["forcing_efold_yr=30"])
+    fast = make_dataset(build_reference(cfg).system, equal_budget, n_realizations=1)
+    base = make_dataset(REFERENCE, equal_budget, n_realizations=1)
+    assert abs(fast.V_f - cfg.forced_variance) < 1e-9
+    # a shorter e-folding time puts more of the record's rise into its last decades
+    late = lambda y: (y[-120:].mean() - y[-240:-120].mean()) / np.ptp(y)
+    assert late(fast.y[fast.system.spinup:]) > late(base.y[REFERENCE.spinup:])
 
 
 def test_co2_forcing_pattern():
@@ -147,12 +170,157 @@ def test_co2_forcing_pattern():
     assert np.allclose(b, raw / np.linalg.norm(raw), atol=1e-15)
 
 
+FILE = with_overrides(DEFAULT, ["forcing_source=file"])
+
+
+def ar6_monthly(column="co2"):
+    """Independent of ablations.py: the real pipeline's monthly interpolation of the AR6 file."""
+    monthly = interpolate(pd.read_csv(AR6_ERF_PATH)[["year", column]])
+    return monthly
+
+
+def test_forcing_source_default():
+    assert DEFAULT.forcing_source == "analytic" and REFERENCE.forcing_source == "analytic"
+    ds = make_dataset(REFERENCE, equal_budget, n_realizations=1)
+    F = co2_forcing_model(1915 + np.arange(N) / 12)
+    assert np.abs(ds.y[REFERENCE.spinup:] - FORCING_AMPLITUDE * (F - F.mean())).max() < 1e-12
+
+
+def test_file_forcing_record():
+    # the record is the monthly AR6 CO2 ERF for Jan 1915 - Dec 2014, up to the centering and the amplitude
+    monthly = ar6_monthly()
+    co2 = monthly.loc[monthly.time.between("1915-01-01", "2014-12-01"), "co2"].to_numpy()
+    assert len(co2) == N
+    ref = build_reference(FILE)
+    ds = make_dataset(ref.system, equal_budget, n_realizations=1)
+    y = ds.y[ref.system.spinup:]
+    expected = ref.system.forcing_amplitude * (co2 - co2.mean())
+    assert np.abs(y - expected).max() < 1e-12 * np.abs(expected).max()
+    assert abs(ds.V_f - FILE.forced_variance) < 1e-9
+    assert np.max(np.abs(y - make_dataset(REFERENCE, equal_budget, n_realizations=1).y[REFERENCE.spinup:])) > 1e-3
+
+
+def test_file_forcing_outside_data():
+    t, values = load_forcing_file(FILE.forcing_file, "co2")
+    early = file_forcing([-3000.0, 0.0, 1000.0, 1700.0, t[0]], FILE.forcing_file, "co2")
+    assert np.all(early == values[0]) and abs(values[0]) < 1e-3
+    slope = (values[-1] - np.interp(t[-1] - FILE_TREND_YEARS, t, values)) / FILE_TREND_YEARS
+    assert abs(slope - 0.0336) < 3e-3, slope
+    late = file_forcing([t[-1], t[-1] + 5, t[-1] + 10], FILE.forcing_file, "co2")
+    assert late[0] == values[-1] and np.allclose(np.diff(late), 5 * slope, rtol=1e-12)
+    # a record past the data uses the trend and stays continuous at the join
+    cfg = with_overrides(FILE, ["record_end_year=2030"])
+    ds = make_dataset(build_reference(cfg).system, equal_budget, n_realizations=1)
+    y = ds.y[ds.system.spinup:]
+    assert np.abs(np.diff(y)).max() < 1.5 * np.abs(np.diff(y[:-200])).max()
+    assert np.allclose(np.diff(y[-120:]), np.diff(y[-120:])[0], rtol=1e-9)
+
+
+def test_file_forcing_formats_and_columns():
+    annual = load_forcing_file(FILE.forcing_file, "co2")
+    with tempfile.TemporaryDirectory() as tmp:
+        monthly_path = pathlib.Path(tmp) / "monthly.csv"
+        ar6_monthly().to_csv(monthly_path, index=False)  # time, co2: the real pipeline's monthly format
+        monthly = load_forcing_file(str(monthly_path), "co2")
+        # same months; values agree to the last bit except where pandas' CSV float parsing is off by an ulp
+        assert np.array_equal(monthly[0], annual[0]) and np.allclose(monthly[1], annual[1], rtol=1e-12, atol=0)
+        ds_monthly = make_dataset(build_reference(with_overrides(FILE, [f"forcing_file={monthly_path}"])).system,
+                                  equal_budget, n_realizations=1)
+    ds_annual = make_dataset(build_reference(FILE).system, equal_budget, n_realizations=1)
+    assert np.allclose(ds_monthly.y[-N:], ds_annual.y[-N:], rtol=1e-12, atol=1e-15)
+    absolute = load_forcing_file(str(AR6_ERF_PATH), "co2")
+    assert np.array_equal(absolute[1], annual[1])
+    total = load_forcing_file(FILE.forcing_file, "total")
+    assert len(total[1]) == len(annual[1]) and np.abs(total[1] - annual[1]).max() > 0.1
+
+
+def test_forcing_source_errors():
+    def raises(overrides, error, text):
+        try:
+            build_reference(with_overrides(DEFAULT, overrides))
+        except error as e:
+            assert text in str(e), str(e)
+            return
+        raise AssertionError(f"{overrides} should raise {error.__name__}")
+    raises(["forcing_source=data"], ValueError, "analytic, analytic_gauss, file")
+    raises(["forcing_source=file", "forcing_file=/nonexistent/forcing.csv"], FileNotFoundError, "/nonexistent")
+    raises(["forcing_source=file", "forcing_column=nope"], KeyError, "available")
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = pathlib.Path(tmp) / "bad.csv"
+        pd.DataFrame({"when": [1, 2], "co2": [0.1, 0.2]}).to_csv(bad, index=False)
+        raises(["forcing_source=file", f"forcing_file={bad}"], ValueError, "`year`")
+
+
+GAUSS = with_overrides(DEFAULT, ["forcing_source=analytic_gauss"])
+
+
+def test_gauss_fit():
+    annual = pd.read_csv(AR6_ERF_PATH)
+    t, y = annual.year.to_numpy() + 6.5 / 12, annual.co2.to_numpy()
+    p0 = [0.02, 1.9, 1.67, 0.05, 1935, 10, 0.08, 1965, 8]
+    bounds = ([-1, 0, 0.1, 0, 1850, 3, 0, 1850, 3], [1, 10, 10, 1, 2019, 80, 1, 2019, 80])
+    p, _ = curve_fit(exp_gauss_model, t, y, p0=p0, bounds=bounds, maxfev=200000)
+    assert np.allclose(p, list(CO2_GAUSS_FIT.values()), rtol=1e-5, atol=0), p
+    fit = CO2_GAUSS_FIT
+    assert fit["A_pos"] > 0 and fit["A_neg"] > 0 and fit["mu_pos"] < fit["mu_neg"]
+    t_month, co2 = co2_monthly()
+    record = (t_month >= 1915) & (t_month < 2015)
+    for mask in (np.ones_like(record), record):
+        gauss = np.sqrt(((co2_forcing_gauss_model(t_month) - co2)[mask] ** 2).mean())
+        exp = np.sqrt(((co2_forcing_model(t_month) - co2)[mask] ** 2).mean())
+        assert gauss < 0.012 and gauss < exp, (gauss, exp)
+
+
+def test_gauss_past_constant():
+    past = co2_forcing_gauss_model(np.linspace(-3000, 1500, 5000))
+    c = CO2_GAUSS_FIT["c"]
+    assert np.abs(past - c).max() / (co2_forcing_gauss_model(2014) - c) < 1e-3
+    (ds,) = find_level(GAUSS, "slow_timescale_snr", 100)(n_realizations=1)
+    s = ds.system
+    assert s.forcing_source == "analytic_gauss"
+    z1 = run_modal(s.Lambda_R, np.outer(ds.y, s.W_inv @ s.b))[:, 0]
+    settled = z1[1000 * 12: 3000 * 12]
+    assert np.ptp(settled) < 1e-3 * np.ptp(z1[s.spinup:]), (np.ptp(settled), np.ptp(z1[s.spinup:]))
+
+
+def test_gauss_source():
+    ref = build_reference(GAUSS)
+    ds = make_dataset(ref.system, equal_budget, n_realizations=1)
+    F = co2_forcing_gauss_model(1915 + np.arange(N) / 12)
+    expected = ref.system.forcing_amplitude * (F - F.mean())
+    assert np.abs(ds.y[ref.system.spinup:] - expected).max() < 1e-12 * np.abs(expected).max()
+    assert abs(ds.V_f - GAUSS.forced_variance) < 1e-9
+    base = make_dataset(REFERENCE, equal_budget, n_realizations=1)
+    assert np.abs(ds.y[-N:] - base.y[-N:]).max() > 1e-3
+    efold = make_dataset(build_reference(with_overrides(GAUSS, ["forcing_efold_yr=30"])).system, equal_budget,
+                         n_realizations=1)
+    assert np.array_equal(efold.y, ds.y)
+
+
+def test_compare_forcings():
+    with tempfile.TemporaryDirectory() as tmp:
+        table = plot_forcing_comparison(DEFAULT, pathlib.Path(tmp) / "f.png")
+        plot_forced_response_comparison(DEFAULT, pathlib.Path(tmp) / "r.png", member=1)
+        assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("f.png", "r.png"))
+    assert table["analytic_gauss"][0] < table["analytic"][0] and table["analytic_gauss"][2] < table["analytic"][2]
+    datasets = forced_datasets(DEFAULT, member=1)
+    internal = [ds.internal[1] for ds in datasets.values()]
+    assert all(np.allclose(x, internal[0], rtol=1e-10, atol=1e-12) for x in internal[1:])
+    forced = [ds.forced for ds in datasets.values()]
+    assert all(np.abs(a - b).max() > 1e-2 for i, a in enumerate(forced) for b in forced[i + 1:])
+
+
 def test_config_json_roundtrip():
     cfg = with_overrides(DEFAULT, ["tau1_yr=50", "mode_overlaps=[0.1, 0.2]", "lag=3"])
+    file_cfg = with_overrides(DEFAULT, ["forcing_source=file", "forcing_file=/some/where/forcing.csv",
+                                        "forcing_column=total"])
+    assert (file_cfg.forcing_source, file_cfg.forcing_file, file_cfg.forcing_column) == (
+        "file", "/some/where/forcing.csv", "total")
     with tempfile.TemporaryDirectory() as tmp:
-        path = pathlib.Path(tmp) / "config.json"
-        to_json(cfg, path)
-        assert from_json(path) == cfg
+        for c in (cfg, file_cfg):
+            path = pathlib.Path(tmp) / "config.json"
+            to_json(c, path)
+            assert from_json(path) == c
 
 
 def test_score_truth():
