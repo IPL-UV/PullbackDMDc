@@ -96,7 +96,7 @@ def main():
     to_json(cfg, out_dir / "config.json")
     pd.DataFrame([row for rows in results for row in rows]).to_csv(out_dir / "ablations.csv", index=False)
     print(f"saved {out_dir}/config.json, ablations.csv")
-    plot_diagnostics(reference_dataset(cfg), FIGURES_DIR / args.name, label=config_diff(cfg))
+    plot_diagnostics(reference_dataset(cfg), FIGURES_DIR / args.name, label=config_diff(cfg), cfg=cfg)
 
 
 if __name__ == "__main__":

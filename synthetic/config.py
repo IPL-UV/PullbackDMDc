@@ -4,8 +4,9 @@ Override from the command line with `--set key=value ...`, e.g.
     python run_ablations.py --name slow50 --set tau1_yr=50 slow_variance=0.5
     python plot_system.py --set tau_p_yr=5 period_p_yr=8
     python run_ablations.py --name ar6 --set forcing_source=file                     # AR6 CO2 from the default file
-    python run_ablations.py --name gauss --set forcing_source=analytic_gauss         # exp + two Gaussians fit
-    python compare_forcings.py --set gauss_dip_amp=0 gauss_bump_year=1940             # reshape the Gaussian model
+    python run_ablations.py --name exp --set forcing_source=analytic                 # plain exp ramp
+    python run_ablations.py --name dip1 --set gauss_dip_amp=1                        # a much deeper dip
+    python compare_forcings.py --set gauss_bump_amp=0.05 gauss_bump_year=1940         # reshape the Gaussian model
     python run_ablations.py --name total --set forcing_source=file forcing_column=total forcing_file=/abs/forcing.csv
 
 Grid size M = 20 and record length N = 1200 months are structural and stay fixed in ablations.py.
@@ -33,26 +34,27 @@ class Config:
     forced_variance: float = 20.0  # V_f of the reference forced response (= M); sets the overall scale
 
     # --- forcing in time (CO2 zonal pattern in space) ----------------------------------------
-    # "analytic": c + a exp((t - 2014) / forcing_efold_yr), fitted to the AR6 CO2 ERF (forcing_file/column ignored)
-    # "analytic_gauss": the exp plus a positive and a negative Gaussian, all fitted jointly to the AR6 CO2 ERF
-    #         (forcing_efold_yr and forcing_file/column ignored)
+    # Always centered on the observed interval (the record): generation, the methods' input and every plot.
+    # "analytic": c + a exp((t - 2014) / forcing_efold_yr), c, a fitted to the AR6 CO2 ERF (forcing_file/column ignored)
+    # "analytic_gauss": c + a exp((t - 2014) / gauss_efold_yr) + bump - dip, c, a fitted jointly with the Gaussians
+    #         to the AR6 CO2 ERF (forcing_efold_yr and forcing_file/column ignored)
     # "file": column forcing_column of forcing_file, an annual CSV with a `year` column or a monthly CSV with a
     #         `time` column (YYYY-MM-01); a relative path is relative to the repo root (forcing_efold_yr ignored)
-    forcing_source: str = "analytic"
+    forcing_source: str = "analytic_gauss"
     forcing_file: str = "data_preparation/AR6_ERF_1750-2019.csv"
     forcing_column: str = "co2"
     record_end_year: int = 2014  # the 100-yr record ends in December of this year (1915-2014)
-    forcing_efold_yr: float = 100 / 1.6709321713250902  # ~59.8 yr; e-folding time of the forcing ramp
-    # analytic_gauss shape: c + a exp((t - 2014) / gauss_efold_yr) + bump - dip (c, a fixed at the fit; they drop out).
-    # Defaults are the joint fit to AR6 CO2. Amplitudes are W m^-2 next to a = 1.964 (only their ratio to the exp
-    # matters, since the overall scale is removed); amplitude 0 removes that Gaussian.
-    gauss_efold_yr: float = 100 / 1.5819078313533055  # ~63.2 yr; e-folding time of the Gaussian model's exp
-    gauss_bump_amp: float = 0.04816339012920922  # positive Gaussian (>= 0)
-    gauss_bump_year: float = 1921.3285060598805
-    gauss_bump_width_yr: float = 17.8812620771011  # sigma (> 0)
-    gauss_dip_amp: float = 0.13721889229450532  # negative Gaussian, subtracted (>= 0)
-    gauss_dip_year: float = 1966.0271283481388
-    gauss_dip_width_yr: float = 14.114214602524019  # sigma (> 0)
+    forcing_efold_yr: float = 60  # e-folding time of the exp ramp (fit: 59.8 yr)
+    # analytic_gauss shape. Amplitudes are W m^-2 next to a = 1.96 (only their ratio to the exp matters, since the
+    # overall scale is removed); amplitude 0 removes that Gaussian. Defaults: one dip, no bump. The joint fit to
+    # AR6 CO2 is efold 63.2 yr, bump 0.048 at 1921 (sigma 17.9 yr), dip 0.137 at 1966 (sigma 14.1 yr).
+    gauss_efold_yr: float = 65  # e-folding time of the Gaussian model's exp
+    gauss_bump_amp: float = 0  # positive Gaussian (>= 0)
+    gauss_bump_year: float = 1920
+    gauss_bump_width_yr: float = 20  # sigma (> 0)
+    gauss_dip_amp: float = 0.25  # negative Gaussian, subtracted (>= 0)
+    gauss_dip_year: float = 1965
+    gauss_dip_width_yr: float = 15  # sigma (> 0)
 
     # --- seeds and forcing history ----------------------------------------------------------
     pattern_seed: int = 22

@@ -1,6 +1,6 @@
 # Synthetic data generation
 
-Follows the synthetic-example appendix of the paper, except for the forcing: the time series is an exponential fit to the AR6 CO$_2$ ERF and the pattern is the zonal-mean CO$_2$ forcing profile (both replace the appendix's forcing). Code: `synthetic_system.py` (patterns, modal matrix) and `ablations.py` (dynamics, forcing, simulation, sweeps). Tests: `test_ablations.py`, `test_run_ablations.py`. Diagnostics: `plot_ablations.py` → `figures/diagnostics/data/`, `plot_system.py` → `figures/diagnostics/system/<name>/`. Ablation runs: `run_ablations.py`, `plot_ablation_results.py` → `figures/ablations/<run>/`. Shared figure style: `plot_style.py`.
+Follows the synthetic-example appendix of the paper, except for the forcing: the time series is an exponential plus one Gaussian dip, shaped after the AR6 CO$_2$ ERF, and the pattern is the zonal-mean CO$_2$ forcing profile (both replace the appendix's forcing). Code: `synthetic_system.py` (patterns, modal matrix) and `ablations.py` (dynamics, forcing, simulation, sweeps). Tests: `test_ablations.py`, `test_run_ablations.py`. Diagnostics: `plot_ablations.py` → `figures/diagnostics/data/`, `plot_system.py` → `figures/diagnostics/system/<name>/`. Ablation runs: `run_ablations.py`, `plot_ablation_results.py` → `figures/ablations/<run>/`. Shared figure style: `plot_style.py`.
 
 ## Grid and patterns: `lat_grid`, `raw_patterns`
 $$\phi_i=-\tfrac{\pi}{2}+\tfrac{i\pi}{M-1},\quad i=0,\dots,M-1,\qquad M=20\ (\Delta\phi\approx 9.47^\circ,\ \text{poles included})$$
@@ -30,35 +30,53 @@ $$D=\operatorname{diag}(\sigma_1^2,\sigma_p^2,\sigma_p^2,\sigma_4^2,\dots,\sigma
 $$s_1^2=\tfrac{\sigma_1^2}{1-\lambda_1^2},\quad s_p^2=\tfrac{\sigma_p^2}{1-\rho^2},\quad s_k^2=\tfrac{\sigma_k^2}{1-\lambda_k^2}\quad\Longleftrightarrow\quad \sigma_1^2=s_1^2(1-\lambda_1^2),\ \ \sigma_p^2=s_p^2(1-\rho^2),\ \ \sigma_k^2=s_c^2(1-\lambda_k^2)$$
 The inputs are the three target modal variances $(s_1^2,s_p^2,s_c^2)$, stored as `s1_sq`, `sp_sq`, `sc_sq`. Changing an eigenvalue recomputes $\sigma^2$, so the modal variance stays fixed.
 
-## Forcing: `co2_forcing_model`, `forcing_series`
-$F$ is an analytic fit to the AR6 CO$_2$ effective radiative forcing (`data_preparation/AR6_ERF_1750-2019.csv`, column `co2`, W m$^{-2}$):
-$$F(t_{\rm yr})=c+a\,e^{(t_{\rm yr}-2014)/\tau_F},\qquad c=0.0191,\ \ a=1.915,\ \ \tau_F=\texttt{forcing\_efold\_yr}=59.8\ \text{yr}$$
-- **Fit.** Least squares to the annual values 1750–2019, placed at mid-year (`CO2_FIT` in `ablations.py`). The RMSE against the monthly AR6 series is $0.038$ W m$^{-2}$, and $0.055$ over the record. The largest misfit is the mid-century bump: the model is $0.10$ W m$^{-2}$ high around 1965 and $0.08$ low around 1920. A literal polynomial-plus-exponential diverges in the past (by 2100 BC it reaches $-5.3$ W m$^{-2}$ with a linear term and $+144$ with a quadratic one), and a polynomial factor only lowers the RMSE to $0.029$. So the plain exponential is used.
-- **Constant past.** $F-c$ decays as $e^{(t-2014)/\tau_F}$, so $|F-c|/(F(2014)-c)<10^{-3}$ for every year before 1600. Over the longest spin-up (4000 yr, at $\tau_1=100$ yr), the forced slow mode varies by less than $10^{-3}$ of its record range between spin-up years 1000 and 3000, once the zero start has decayed. The `forcing` diagnostic shows this.
-- **One shape parameter.** The record mean is removed and $a$ is recalibrated (below), so $c$ and the fitted amplitude drop out. Only $\tau_F$ shapes the forcing; a smaller $\tau_F$ puts more of the rise into the last decades.
+## Forcing: `centered_forcing`, `forcing_series`
+**Centering, always.** The forcing is centered on the observed interval, i.e. every month after the spin-up (the record, 1915–2014):
+$$y(t)=a\Big(F(Y_0+t/12)-\tfrac1N\textstyle\sum_{s=0}^{N-1}F(Y_0+s/12)\Big),\qquad t=-T_f,\dots,N-1$$
+- **One definition.** `centered_forcing` is the only place where the centering is done.
+- **Same offset before the record.** The record mean is removed at all times, so the spin-up and the forcing history keep the same offset. This mirrors the real-world experiments, where `load_forcings_pullback` subtracts the record mean from both the record and the history.
+- **Used everywhere.** This one series generates the data, is the forcing passed to the methods (`forcings()` returns slices of it, unchanged), and is what every forcing plot draws (`forcing.png`, `compare_forcings.png`, `forcing_response_check.png`).
+- **Enforced.** `make_dataset` asserts a zero record mean, and `test_forcing_centered_everywhere` checks every sweep level and the plotted curves.
 
-**Exp + Gaussians** (`forcing_source = "analytic_gauss"`, `co2_forcing_gauss_model`). The exponential plus one positive and one negative Gaussian, all fitted jointly to the same AR6 values (`CO2_GAUSS_FIT`):
-$$F(t)=c+a\,e^{k(t-2014)/100}+A_+e^{-(t-\mu_+)^2/2\sigma_+^2}-A_-e^{-(t-\mu_-)^2/2\sigma_-^2}$$
-The fitted values are $c=-0.0054$, $a=1.964$ and $k=1.582$ (e-folding 63 yr), with a bump $A_+=0.048$ at $\mu_+=1921$ ($\sigma_+=17.9$ yr) and a dip $A_-=0.137$ at $\mu_-=1966$ ($\sigma_-=14.1$ yr).
-- **Fit:** the RMSE is $0.0092$ W m$^{-2}$, and $0.0101$ over the record, against $0.038$ and $0.055$ for the exponential. The record shape, after centering and scaling to unit std, has an RMSE of $0.022$ against $0.124$.
-- **Past:** the Gaussians vanish before about 1850, so the past is still constant: $|F-c|<3\times10^{-4}$ of the rise before 1500. `forcing_efold_yr` does not affect this model.
-- **Shape parameters:** `gauss_efold_yr`, `gauss_bump_amp`, `gauss_bump_year`, `gauss_bump_width_yr`, `gauss_dip_amp`, `gauss_dip_year` and `gauss_dip_width_yr` default to the fit above. They can be overridden, for example `--set gauss_dip_amp=0`.
-  - Amplitudes are in W m$^{-2}$ next to the fixed $a=1.964$, and only their ratio to the exponential matters. An amplitude of 0 removes that Gaussian.
-  - Amplitudes must be $\ge0$ and widths and e-folding $>0$.
+At the default, the past constant is $y=-0.115$ against a record range of $0.195$, and the history mean is $-0.088$. The forced response therefore starts in equilibrium with a negative forcing. For long $\tau_1$ it is still relaxing during the record and carries a large offset (`forced_response_tau1.png`).
+
+Record month $t=0,\dots,N-1$ is the fractional year $t_{\rm yr}=Y_0+t/12$, with $Y_0=\texttt{record\_end\_year}-99$. The default `record_end_year = 2014` gives a record from Jan 1915 to Dec 2014.
+
+$a=$ `FORCING_AMPLITUDE` is fixed once so that $V^{(f)}=M$ at the starting point, which makes the mean forced variance per latitude 1. It is the same in every sweep. The forcing depends on absolute dates, so a longer spin-up or history only extends it backwards; the record values do not change. With $a=1$, $V^{(f)}=1.287\times10^3$ at $\tau_1=20$ yr and $8.018$ at $\tau_1=0.84$ yr. These differ from the appendix values ($\approx4.4\times10^3$ and $\approx17$), which were computed with the appendix's forcing.
+
+**Default: exp + one dip** (`forcing_source = "analytic_gauss"`, `co2_forcing_gauss_model`):
+$$F(t)=c+a\,e^{(t-2014)/\tau_G}+A_+e^{-(t-\mu_+)^2/2\sigma_+^2}-A_-e^{-(t-\mu_-)^2/2\sigma_-^2}$$
+- **Default values.** $\tau_G=65$ yr, a dip $A_-=0.25$ at $\mu_-=1965$ ($\sigma_-=15$ yr), and no bump ($A_+=0$; its shape defaults to 1920 and $\sigma_+=20$ yr). These are round numbers, not a fit.
+- **Provenance.** The joint least-squares fit of the exp and two Gaussians to the annual AR6 CO$_2$ values (`CO2_GAUSS_FIT`) gives:
+  - $c=-0.0054$, $a=1.96$ and e-folding 63.2 yr;
+  - a bump of 0.048 at 1921 ($\sigma$ 17.9 yr) and a dip of 0.137 at 1966 ($\sigma$ 14.1 yr);
+  - an RMSE of 0.0092 W m$^{-2}$, against 0.038 for the exponential.
+
+  The default deepens the dip and drops the bump. Against the true forcing (both centered), the default's record RMSE is $0.035$ W m$^{-2}$, against $0.055$ for the exponential, and its record-shape RMSE is $0.058$, against $0.125$.
+- **Shape parameters.**
+  - The parameters are `gauss_efold_yr`, `gauss_bump_amp`, `gauss_bump_year`, `gauss_bump_width_yr`, `gauss_dip_amp`, `gauss_dip_year` and `gauss_dip_width_yr`.
+  - Amplitudes are in W m$^{-2}$ next to the fixed $a=1.96$; only their ratio to the exponential matters, and 0 removes that Gaussian.
+  - Amplitudes must be $\ge0$, and widths and the e-folding $>0$.
   - $c$ and $a$ stay at the fit, since they drop out.
-- **Comparison:** `compare_forcings.py` plots the true forcing and both models (`figures/diagnostics/data/compare_forcings.png`). It also plots the forced response of one system under each forcing (`compare_forced_responses.png`).
+  - For example, `--set gauss_dip_amp=1` gives the amplified-dip run `dip1`.
+- **Constant past.** The Gaussians vanish before about 1850, so the past is constant: $|F-c|<10^{-3}$ of the rise before 1500.
 
-**Forcing source** (`forcing_source`, default `"analytic"`). With `forcing_source = "file"`, $F$ is instead column `forcing_column` (default `co2`) of `forcing_file` (default `data_preparation/AR6_ERF_1750-2019.csv`; a relative path is relative to the repo root). `load_forcing_file` accepts two formats:
+**Exp** (`forcing_source = "analytic"`, `co2_forcing_model`): $F(t)=c+a\,e^{(t-2014)/\tau_F}$, with $\tau_F=$ `forcing_efold_yr` $=60$ yr.
+- **Provenance.** The fit is least squares to the annual values 1750–2019 at mid-year (`CO2_FIT`): $c=0.0191$, $a=1.915$ and $\tau_F=59.8$ yr. Its RMSE is $0.038$ W m$^{-2}$, and $0.055$ over the record. The largest misfit is the mid-century bump.
+- **No polynomial.** A literal polynomial-plus-exponential diverges in the past, so the plain exponential is used.
+- **Constant past.** $|F-c|/(F(2014)-c)<10^{-3}$ for every year before 1590. Over the longest spin-up (4000 yr, at $\tau_1=100$ yr), the forced slow mode varies by less than $10^{-3}$ of its record range between spin-up years 1000 and 3000. The `forcing` diagnostic shows this.
+
+**File** (`forcing_source = "file"`): column `forcing_column` (default `co2`) of `forcing_file` (default `data_preparation/AR6_ERF_1750-2019.csv`; a relative path is relative to the repo root). `load_forcing_file` accepts two formats:
 - an annual CSV with a `year` column, interpolated to months with `interpolate` as for the real data;
 - a monthly CSV with a `time` column (`YYYY-MM-01`), used as is.
 
-Outside the data, $F$ is held at its first value (for AR6, $\approx0$: a constant past) and continued after the data at its linear trend over the last 10 years. Centering and $a$ below are the same for both sources. `forcing_efold_yr` only affects `analytic`, and `forcing_file`/`forcing_column` only affect `file`.
+Outside the data, $F$ is held at its first value (for AR6, $\approx0$: a constant past) and continued after the data at its linear trend over the last 10 years. `forcing_efold_yr` only affects `analytic`, and `forcing_file`/`forcing_column` only affect `file`.
 
-Record month $t=0,\dots,N-1$ is the fractional year $t_{\rm yr}=Y_0+t/12$, with $Y_0=\texttt{record\_end\_year}-99$. The default `record_end_year = 2014` gives a record from Jan 1915 to Dec 2014.
-$$y(t)=a\Big(F(Y_0+t/12)-\tfrac1N\textstyle\sum_{s=0}^{N-1}F(Y_0+s/12)\Big),\qquad t=-T_f,\dots,N-1$$
-The record mean is removed at all times, including spin-up. $a=$ `FORCING_AMPLITUDE` is fixed once so that $V^{(f)}=M$ at the starting point, which makes the mean forced variance per latitude 1. It is the same in every sweep. The forcing depends on absolute dates, so a longer spin-up or history only extends it backwards; the record values do not change.
-
-With $a=1$, $V^{(f)}=1.477\times10^3$ at $\tau_1=20$ yr and $7.376$ at $\tau_1=0.84$ yr. These differ from the appendix values ($\approx4.4\times10^3$ and $\approx17$), which were computed with the appendix's forcing.
+**Comparison and checks:**
+- `compare_forcings.py` plots the true forcing and both models, all centered on the record (`figures/diagnostics/data/compare_forcings.png`).
+- `plot_system.py` diagnostics:
+  - `forced_response_tau1`: only the forced responses of the `slow_timescale_snr` datasets at $\tau_1=1,20,100$ yr, in tall panels;
+  - `forcing_response_check`: the dataset's own forcing (exactly the methods' input) and its forced response, against the quasi-equilibrium $g\,y$ with $g=(I-A)^{-1}\hat b$. Run it with `--study slow_timescale_snr --level 1`.
 
 ## Spin-up and ground truth: `System.noise_spinup`, `System.spinup`, `forced_response`, `internal_variability`
 $$T_s=\max\big(\lceil 40\,\max_k\tau(\lambda_k)\rceil,\ 1200\big),\qquad T_f=\max(T_s,\ \texttt{history})$$
@@ -78,7 +96,7 @@ The empirical SNR is $V^{(f)}/\sum_i\operatorname{Var}_t x^{(i)}_i$ per realizat
 |---|---|
 | step, record | monthly, $N=1200$ (100 yr), $M=20$ |
 | patterns | `make_W(20, seed=22)` |
-| forcing | $c+a\,e^{(t-2014)/59.8\,\text{yr}}$ fitted to the AR6 CO$_2$ ERF, record Jan 1915 – Dec 2014 (`record_end_year = 2014`); pattern $\hat b$ = zonal-mean CO$_2$ forcing |
+| forcing | $c+a\,e^{(t-2014)/65\,\text{yr}}-0.25\,e^{-(t-1965)^2/2\cdot15^2}$, centered on the record Jan 1915 – Dec 2014 (`record_end_year = 2014`); pattern $\hat b$ = zonal-mean CO$_2$ forcing |
 | slow | $\tau_1=20$ yr, $\lambda_1=e^{-1/240}=0.9958$ |
 | pair | $\tau_p=2$ yr, $\rho=e^{-1/24}=0.959$; period 4 yr, $\theta=2\pi/48$ (ACF first zero at 12 months) |
 | complement | $\lambda_k\overset{iid}{\sim}\mathcal U(0,0.1)$, 17 values, seed 20 |

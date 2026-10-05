@@ -31,6 +31,9 @@ SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 HISTORY = DEFAULT.history
 RECORD_END_YEAR = DEFAULT.record_end_year
 AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
+# The forcing is always centered on the observed interval (centered_forcing); the fits below are its provenance,
+# the config defaults are rounded or chosen values (exp: efold 60 yr; exp + dip: efold 65 yr, dip 0.25 at 1965,
+# sigma 15 yr, no bump).
 # F(t) = c + a exp((t - 2014) / efold) least-squares fitted to the annual AR6 CO2 ERF, 1750-2019 (values at
 # mid-year); efold = 100 / k yr. RMSE 0.038 W m^-2 (0.056 over 1915-2014). Constant c in the past.
 CO2_FIT = dict(c=0.019123072547470428, a=1.9152644964970247, k=1.6709321713250902)
@@ -222,10 +225,19 @@ def forcing_values(system, t_yr):
     raise ValueError(f"unknown forcing_source {system.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
 
 
+def centered_forcing(system, t_yr):
+    """The system's forcing (W m^-2) at fractional years minus its mean over the observed interval (the record).
+
+    The single definition of the centering: data generation, the forcing given to the methods and every plot
+    use it, as the real-world experiments center the forcing on the training record (history included).
+    """
+    return forcing_values(system, t_yr) - forcing_values(system, record_years(system)).mean()
+
+
 def forcing_series(system):
-    F = forcing_values(system, record_years(system)[0] + np.arange(-system.spinup, N) / 12)
-    # centered on the record; the same offset is kept during spin-up
-    return system.forcing_amplitude * (F - F[system.spinup:].mean())
+    """Forcing over spin-up + record, centered on the record (the same offset is kept during spin-up)."""
+    t_yr = record_years(system)[0] + np.arange(-system.spinup, N) / 12
+    return system.forcing_amplitude * centered_forcing(system, t_yr)
 
 
 def run_modal(Lambda, drive, z0=None):
@@ -330,6 +342,8 @@ class SyntheticDataset:
 def make_dataset(system, budget, *, study="", param_name="", param_value=np.nan,
                  n_realizations=N_REALIZATIONS, seed=0):
     y, forced = forced_response(system)
+    record = y[system.spinup:]
+    assert abs(record.mean()) <= 1e-12 * max(np.ptp(record), 1e-300), "forcing must be centered on the record"
     system = replace(system, **budget(forced_variance(forced)))
     return SyntheticDataset(
         study=study, param_name=param_name, param_value=float(param_value), system=system,

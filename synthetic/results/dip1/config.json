@@ -19,7 +19,7 @@
   "gauss_bump_amp": 0,
   "gauss_bump_year": 1920,
   "gauss_bump_width_yr": 20,
-  "gauss_dip_amp": 0.25,
+  "gauss_dip_amp": 1,
   "gauss_dip_year": 1965,
   "gauss_dip_width_yr": 15,
   "pattern_seed": 22,

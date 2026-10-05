@@ -2,6 +2,7 @@
 
 import pathlib
 import tempfile
+from dataclasses import replace
 from functools import partial
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from ablations import (
     TOTAL_SNRS,
     SLOW_TIMESCALES_YR,
     build_reference,
+    centered_forcing,
     CO2_FIT,
     CO2_GAUSS_FIT,
     co2_forcing_gauss_model,
@@ -42,6 +44,7 @@ from ablations import (
     make_dataset,
     modal_coordinates,
     partial_snr_sweep,
+    record_years,
     run_modal,
     slow_timescale_sweep,
     study_levels,
@@ -52,12 +55,28 @@ from scipy.optimize import curve_fit
 from synthetic_system import CO2_ZONAL_FORCING, co2_forcing_pattern, lat_grid
 from config import DEFAULT, Config, config_diff, from_json, slug, to_json, with_overrides
 from methods import fit_lim, fit_lim_opt, fit_pullback_dmdc, make_methods
-from compare_forcings import forced_datasets, plot_forced_response_comparison, plot_forcing_comparison
-from plot_system import plot_ensemble_super_spaghetti, reference_dataset
+from compare_forcings import plot_forcing_comparison
+from plot_system import (
+    TAU1_COMPARED,
+    file_curve,
+    forcing_curves,
+    plot_ensemble_super_spaghetti,
+    plot_forced_response_tau1,
+    plot_forcing_response_check,
+    reference_dataset,
+    tau1_datasets,
+)
 from run_ablations import run_level, score
 from test import recovery_metrics
 
 SMALL = dict(n_realizations=2)
+EXP = with_overrides(DEFAULT, ["forcing_source=analytic"])
+# the least-squares fits; the defaults are their rounded (exp) or chosen (exp + dip) values
+EXP_FIT = replace(EXP, forcing_efold_yr=100 / CO2_FIT["k"])
+GAUSS_FIT = replace(DEFAULT, forcing_source="analytic_gauss", gauss_efold_yr=100 / CO2_GAUSS_FIT["k"],
+                    gauss_bump_amp=CO2_GAUSS_FIT["A_pos"], gauss_bump_year=CO2_GAUSS_FIT["mu_pos"],
+                    gauss_bump_width_yr=CO2_GAUSS_FIT["sigma_pos"], gauss_dip_amp=CO2_GAUSS_FIT["A_neg"],
+                    gauss_dip_year=CO2_GAUSS_FIT["mu_neg"], gauss_dip_width_yr=CO2_GAUSS_FIT["sigma_neg"])
 
 
 def test_default_reference_unchanged():
@@ -127,20 +146,21 @@ def test_forcing_fit():
     model = lambda t, c, a, k: c + a * np.exp(k * (t - 2014) / 100)
     p, _ = curve_fit(model, t, y, p0=[0, 2, 2], maxfev=100000)
     assert np.allclose(p, [CO2_FIT["c"], CO2_FIT["a"], CO2_FIT["k"]], rtol=1e-6, atol=0), p
-    assert abs(DEFAULT.forcing_efold_yr - 100 / CO2_FIT["k"]) < 1e-12
+    assert DEFAULT.forcing_efold_yr == 60 and abs(DEFAULT.forcing_efold_yr - EXP_FIT.forcing_efold_yr) < 2.5
     t_month, co2 = co2_monthly()
-    residual = co2_forcing_model(t_month) - co2
+    residual = co2_forcing_model(t_month, EXP_FIT.forcing_efold_yr) - co2
     record = (t_month >= 1915) & (t_month < 2015)
     assert np.sqrt((residual**2).mean()) < 0.04 and np.sqrt((residual[record] ** 2).mean()) < 0.06
     # the record forcing is the model, up to the centering and the amplitude
-    ds = make_dataset(REFERENCE, equal_budget, n_realizations=1)
-    F = co2_forcing_model(1915 + np.arange(N) / 12)
-    expected = FORCING_AMPLITUDE * (F - F.mean())
-    assert np.abs(ds.y[REFERENCE.spinup:] - expected).max() < 1e-12 * np.abs(expected).max()
+    ref = build_reference(EXP)
+    ds = make_dataset(ref.system, equal_budget, n_realizations=1)
+    F = co2_forcing_model(1915 + np.arange(N) / 12, EXP.forcing_efold_yr)
+    expected = ref.system.forcing_amplitude * (F - F.mean())
+    assert np.abs(ds.y[ref.system.spinup:] - expected).max() < 1e-12 * np.abs(expected).max()
 
 
 def test_forcing_past_constant():
-    past = co2_forcing_model(np.linspace(-3000, 1600, 5000))
+    past = co2_forcing_model(np.linspace(-3000, 1590, 5000))
     assert np.abs(past - CO2_FIT["c"]).max() / (co2_forcing_model(2014) - CO2_FIT["c"]) < 1e-3
     # the longest spin-up (tau_1 = 100 yr): the forced response sits still for millennia before the record
     (ds,) = find_level(DEFAULT, "slow_timescale_snr", 100)(n_realizations=1)
@@ -153,13 +173,13 @@ def test_forcing_past_constant():
 
 
 def test_forcing_efold_override():
-    cfg = with_overrides(DEFAULT, ["forcing_efold_yr=30"])
+    cfg = with_overrides(EXP, ["forcing_efold_yr=30"])
     fast = make_dataset(build_reference(cfg).system, equal_budget, n_realizations=1)
-    base = make_dataset(REFERENCE, equal_budget, n_realizations=1)
+    base = make_dataset(build_reference(EXP).system, equal_budget, n_realizations=1)
     assert abs(fast.V_f - cfg.forced_variance) < 1e-9
     # a shorter e-folding time puts more of the record's rise into its last decades
     late = lambda y: (y[-120:].mean() - y[-240:-120].mean()) / np.ptp(y)
-    assert late(fast.y[fast.system.spinup:]) > late(base.y[REFERENCE.spinup:])
+    assert late(fast.y[fast.system.spinup:]) > late(base.y[base.system.spinup:])
 
 
 def test_co2_forcing_pattern():
@@ -182,9 +202,9 @@ def ar6_monthly(column="co2"):
 
 
 def test_forcing_source_default():
-    assert DEFAULT.forcing_source == "analytic" and REFERENCE.forcing_source == "analytic"
+    assert DEFAULT.forcing_source == "analytic_gauss" and REFERENCE.forcing_source == "analytic_gauss"
     ds = make_dataset(REFERENCE, equal_budget, n_realizations=1)
-    F = co2_forcing_model(1915 + np.arange(N) / 12)
+    F = co2_forcing_gauss_model(1915 + np.arange(N) / 12)
     assert np.abs(ds.y[REFERENCE.spinup:] - FORCING_AMPLITUDE * (F - F.mean())).max() < 1e-12
 
 
@@ -268,8 +288,10 @@ def test_gauss_fit():
     t_month, co2 = co2_monthly()
     record = (t_month >= 1915) & (t_month < 2015)
     for mask in (np.ones_like(record), record):
-        gauss = np.sqrt(((co2_forcing_gauss_model(t_month) - co2)[mask] ** 2).mean())
-        exp = np.sqrt(((co2_forcing_model(t_month) - co2)[mask] ** 2).mean())
+        fitted = co2_forcing_gauss_model(t_month, 100 / fit["k"], (fit["A_pos"], fit["mu_pos"], fit["sigma_pos"]),
+                                         (fit["A_neg"], fit["mu_neg"], fit["sigma_neg"]))
+        gauss = np.sqrt(((fitted - co2)[mask] ** 2).mean())
+        exp = np.sqrt(((co2_forcing_model(t_month, EXP_FIT.forcing_efold_yr) - co2)[mask] ** 2).mean())
         assert gauss < 0.012 and gauss < exp, (gauss, exp)
 
 
@@ -292,24 +314,26 @@ def test_gauss_source():
     expected = ref.system.forcing_amplitude * (F - F.mean())
     assert np.abs(ds.y[ref.system.spinup:] - expected).max() < 1e-12 * np.abs(expected).max()
     assert abs(ds.V_f - GAUSS.forced_variance) < 1e-9
-    base = make_dataset(REFERENCE, equal_budget, n_realizations=1)
+    base = make_dataset(build_reference(EXP).system, equal_budget, n_realizations=1)
     assert np.abs(ds.y[-N:] - base.y[-N:]).max() > 1e-3
     efold = make_dataset(build_reference(with_overrides(GAUSS, ["forcing_efold_yr=30"])).system, equal_budget,
                          n_realizations=1)
     assert np.array_equal(efold.y, ds.y)
 
 
-def test_gauss_defaults_match_fit():
+def test_gauss_defaults():
     fit = CO2_GAUSS_FIT
-    assert abs(DEFAULT.gauss_efold_yr - 100 / fit["k"]) < 1e-12
-    assert (DEFAULT.gauss_bump_amp, DEFAULT.gauss_bump_year, DEFAULT.gauss_bump_width_yr) == (
-        fit["A_pos"], fit["mu_pos"], fit["sigma_pos"])
-    assert (DEFAULT.gauss_dip_amp, DEFAULT.gauss_dip_year, DEFAULT.gauss_dip_width_yr) == (
-        fit["A_neg"], fit["mu_neg"], fit["sigma_neg"])
+    # rounded fit: e-folding, years and widths within 2.5 yr of the fit; the amplitudes are chosen (one dip)
+    assert (DEFAULT.gauss_efold_yr, DEFAULT.gauss_bump_amp, DEFAULT.gauss_dip_amp) == (65, 0, 0.25)
+    for value, fitted in ((DEFAULT.gauss_efold_yr, 100 / fit["k"]), (DEFAULT.gauss_bump_year, fit["mu_pos"]),
+                          (DEFAULT.gauss_bump_width_yr, fit["sigma_pos"]), (DEFAULT.gauss_dip_year, fit["mu_neg"]),
+                          (DEFAULT.gauss_dip_width_yr, fit["sigma_neg"])):
+        assert abs(value - fitted) <= 2.5 and value % 5 == 0, (value, fitted)
     t = np.linspace(1500, 2030, 4000)
     expected = exp_gauss_model(t, **fit)
-    assert np.allclose(co2_forcing_gauss_model(t), expected, rtol=1e-12, atol=0)
-    assert np.allclose(forcing_values(build_reference(GAUSS).system, t), expected, rtol=1e-12, atol=0)
+    assert np.allclose(forcing_values(build_reference(GAUSS_FIT).system, t), expected, rtol=1e-12, atol=0)
+    dip_only = exp_gauss_model(t, fit["c"], fit["a"], 100 / 65, 0, 1920, 20, 0.25, 1965, 15)
+    assert np.allclose(co2_forcing_gauss_model(t), dip_only, rtol=1e-12, atol=1e-14)
 
 
 def gauss_record(overrides, source="analytic_gauss"):
@@ -324,11 +348,13 @@ def test_gauss_overrides():
     bump = gaussian(t, DEFAULT.gauss_bump_amp, DEFAULT.gauss_bump_year, DEFAULT.gauss_bump_width_yr)
     exp_only = co2_forcing_gauss_model(t, DEFAULT.gauss_efold_yr, (0.0, 0.0, 1.0), (0.0, 0.0, 1.0))
     assert np.allclose(forcing_values(no_dip, t), exp_only + bump, rtol=1e-14, atol=1e-15)
-    moved = build_reference(with_overrides(GAUSS, ["gauss_dip_amp=0", "gauss_bump_year=1940"])).system
+    moved = build_reference(with_overrides(GAUSS, ["gauss_dip_amp=0", "gauss_bump_amp=0.05",
+                                                   "gauss_bump_year=1940"])).system
     peak = t[np.argmax(forcing_values(moved, t) - exp_only)]
     assert abs(peak - 1940) < 0.1, peak
     _, base = gauss_record([])
-    for overrides in (["gauss_efold_yr=40"], ["gauss_dip_amp=0"], ["gauss_bump_year=1940", "gauss_bump_width_yr=8"]):
+    for overrides in (["gauss_efold_yr=40"], ["gauss_dip_amp=0"],
+                      ["gauss_bump_amp=0.05", "gauss_bump_year=1940", "gauss_bump_width_yr=8"]):
         ref, ds = gauss_record(overrides)
         assert abs(ds.V_f - DEFAULT.forced_variance) < 1e-9, overrides
         assert np.abs(ds.y[-N:] - base.y[-N:]).max() > 1e-3, overrides
@@ -347,25 +373,63 @@ def test_gauss_validation():
             assert bad[0].split("=")[0] in str(e), str(e)
         else:
             raise AssertionError(f"{bad} should raise")
-        build_reference(with_overrides(DEFAULT, bad))  # ignored by the other sources
+        build_reference(with_overrides(EXP, bad))  # ignored by the other sources
 
 
 def test_compare_forcings():
     with tempfile.TemporaryDirectory() as tmp:
         table = plot_forcing_comparison(DEFAULT, pathlib.Path(tmp) / "f.png")
-        plot_forced_response_comparison(DEFAULT, pathlib.Path(tmp) / "r.png", member=1)
-        assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("f.png", "r.png"))
-    assert table["analytic_gauss"][0] < table["analytic"][0] and table["analytic_gauss"][2] < table["analytic"][2]
+        fit = plot_forcing_comparison(GAUSS_FIT, pathlib.Path(tmp) / "g.png")
+        no_dip = plot_forcing_comparison(with_overrides(GAUSS_FIT, ["gauss_dip_amp=0"]), pathlib.Path(tmp) / "n.png")
+        assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("f.png", "g.png", "n.png"))
+    assert fit["analytic_gauss"][0] < fit["analytic"][0] and fit["analytic_gauss"][2] < fit["analytic"][2]
+    assert no_dip["analytic_gauss"][0] > fit["analytic_gauss"][0] and no_dip["analytic"] == fit["analytic"]
+
+
+def test_forcing_centered_everywhere():
+    """Generation, the methods' input and the plotted curves all use the forcing centered on the record."""
+    for cfg in (DEFAULT, EXP, FILE):
+        levels = study_levels(cfg)
+        if cfg is not DEFAULT:
+            levels = [level for level in levels if level[0] in ("total_snr", "slow_timescale_snr")]
+        for study, value, make in levels:
+            (ds,) = make(n_realizations=1)
+            s = ds.system
+            record = ds.y[s.spinup:]
+            assert abs(record.mean()) < 1e-12 * np.ptp(record), (cfg.forcing_source, study, value)
+            long_forcings, short_forcings, history = ds.forcings()
+            assert np.array_equal(short_forcings[:, 0], record)
+            assert np.array_equal(long_forcings[:, 0], ds.y[s.spinup - history:])
+            t = record_years(s)[0] + np.arange(-s.spinup, N) / 12
+            assert np.allclose(ds.y, s.forcing_amplitude * centered_forcing(s, t), rtol=0, atol=1e-14)
+        s = build_reference(cfg).system
+        record = record_years(s)
+        for values, _ in forcing_curves(s, record).values():
+            assert abs(values.mean()) < 1e-12
+        t, values = file_curve(s)
+        in_record = (t >= record[0]) & (t <= record[-1])
+        assert in_record.sum() == N and abs(values[in_record].mean()) < 1e-12
+
+
+def test_tau1_diagnostics():
+    datasets = tau1_datasets(DEFAULT)
+    assert tuple(datasets) == TAU1_COMPARED
+    for tau, ds in datasets.items():
+        (sweep,) = find_level(DEFAULT, "slow_timescale_snr", tau)(n_realizations=2)
+        assert np.array_equal(ds.forced, sweep.forced) and np.array_equal(ds.y, sweep.y)
+    V_f = [ds.V_f for ds in datasets.values()]
+    assert V_f[0] < V_f[1] < V_f[2], V_f
+    (fast,) = find_level(DEFAULT, "slow_timescale_snr", 1)(n_realizations=1)
     with tempfile.TemporaryDirectory() as tmp:
-        no_dip = plot_forcing_comparison(with_overrides(DEFAULT, ["gauss_dip_amp=0"]), pathlib.Path(tmp) / "f.png")
-        plot_forced_response_comparison(with_overrides(DEFAULT, ["gauss_dip_amp=0"]), pathlib.Path(tmp) / "r.png")
-        assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("f.png", "r.png"))
-    assert no_dip["analytic_gauss"][0] > table["analytic_gauss"][0] and no_dip["analytic"] == table["analytic"]
-    datasets = forced_datasets(DEFAULT, member=1)
-    internal = [ds.internal[1] for ds in datasets.values()]
-    assert all(np.allclose(x, internal[0], rtol=1e-10, atol=1e-12) for x in internal[1:])
-    forced = [ds.forced for ds in datasets.values()]
-    assert all(np.abs(a - b).max() > 1e-2 for i, a in enumerate(forced) for b in forced[i + 1:])
+        plot_forced_response_tau1(fast, pathlib.Path(tmp) / "t.png")
+        plot_forcing_response_check(fast, pathlib.Path(tmp) / "c.png")
+        assert all((pathlib.Path(tmp) / name).stat().st_size > 0 for name in ("t.png", "c.png"))
+    # at tau1 = 1 yr the forced response is close to quasi-equilibrium with the centered forcing, with no offset
+    s = fast.system
+    gain = np.linalg.solve(np.eye(M) - s.A, s.b)
+    quasi = np.outer(fast.y[s.spinup:], gain)
+    assert np.sqrt(((fast.forced - quasi) ** 2).mean() / (fast.forced ** 2).mean()) < 0.1
+    assert np.abs(fast.forced.mean(axis=0)).max() < 0.05 * np.abs(fast.forced).max()
 
 
 def test_config_json_roundtrip():
