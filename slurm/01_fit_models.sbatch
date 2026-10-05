@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO_ROOT=/home/nathan/DMDcForcedResponse
+REPO_ROOT=/home/nathan/PullbackDMDc
 export PBDMDC_DATA_ROOT=/data/databases/dmdc-variants/mmlea_v2/
 export PBDMDC_ARTIFACT_ROOT=/data/users/nate/PullbackDMDc
 export PBDMDC_PDF_ROOT="$REPO_ROOT/evaluation_results"
