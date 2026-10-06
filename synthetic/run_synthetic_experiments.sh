@@ -9,7 +9,7 @@ set -eo pipefail
 # conda's deactivate hooks reference unset vars, so -u only goes on after activation
 source /opt/ohpc/pub/miniforge3/bin/activate dmdc_variants
 set -u
-export OMP_NUM_THREADS=1   # the per-step loop is BLAS-thread bound; see DATA_GENERATION.md
+export OMP_NUM_THREADS=1   # the per-step loop is BLAS-thread bound; see README.md
 export MPLBACKEND=Agg
 cd "$(dirname "$(readlink -f "$0")")"
 

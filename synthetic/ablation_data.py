@@ -30,7 +30,7 @@ SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 HISTORY = DEFAULT.history
 RECORD_END_YEAR = DEFAULT.record_end_year
 AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
-# Least-squares fits to the annual AR6 CO2 ERF, 1750-2019; see DATA_GENERATION.md for their quality and for how
+# Least-squares fits to the annual AR6 CO2 ERF, 1750-2019; see README.md for their quality and for how
 # the config defaults round them. The forcing is always centered on the record (centered_forcing).
 CO2_FIT = dict(c=0.019123072547470428, a=1.9152644964970247, k=1.6709321713250902)
 CO2_FIT_REFERENCE_YEAR = 2014

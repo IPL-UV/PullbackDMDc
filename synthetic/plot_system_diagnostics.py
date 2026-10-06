@@ -7,7 +7,7 @@
     python plot_system_diagnostics.py --plots forced_response_tau1            # forced responses at tau1 = 1, 20, 100 yr
     python plot_system_diagnostics.py --plots forced_response_shape           # forced-response shape against the forcing
 
-Every forcing shown is centered on the record (see DATA_GENERATION.md).
+Every forcing shown is centered on the record (see README.md).
 """
 
 import argparse

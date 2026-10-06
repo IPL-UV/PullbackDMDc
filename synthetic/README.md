@@ -1,8 +1,139 @@
-# Synthetic data generation
+# Synthetic experiments
 
-Follows the synthetic-example appendix of the paper, except for the forcing: the time series is an exponential plus one Gaussian dip, shaped after the AR6 CO$_2$ ERF, and the pattern is the zonal-mean CO$_2$ forcing profile (both replace the appendix's forcing). Code: `system_patterns.py` (patterns, modal matrix) and `ablation_data.py` (dynamics, forcing, simulation, sweeps). Run the tests with `./run_synthetic_tests.sh` (the unit tests via `run_tests.py`, then the end-to-end figure checks in `tests/test_synthetic_pipeline.py`); `./run_synthetic_experiments.sh` regenerates every run and figure. Diagnostics: `plot_ablation_diagnostics.py` → `figures/diagnostics/data/`, `plot_system_diagnostics.py` → `figures/diagnostics/system/<name>/`. Ablation runs: `run_ablation_studies.py`, `plot_ablation_run_results.py` → `figures/ablations/<run>/`. Shared figure style and helpers (`save`, `zero_line`, `record_span`, the forcing panels): `plot_style.py`.
+A 20-mode linear system — one slow mode, one oscillating pair, 17 complement modes — driven by a forcing shaped
+after the AR6 CO$_2$ ERF. Four estimators (`PullbackDMDc`, `LIM`, `LIM-opt`, `LR`) are fitted to 100 noise
+realizations at every level of every ablation study, and scored on how well they recover the forced response and
+the slow mode. [Data generation](#data-generation) at the end of this file is the full specification of the system.
 
-## Grid and patterns: `lat_grid`, `raw_patterns`
+Everything here runs from `synthetic/`. The folder is not a package: scripts are run from inside it.
+
+## Quickstart
+
+```bash
+./run_synthetic_experiments.sh   # every ablation run and every figure (long; the fits dominate)
+./run_synthetic_tests.sh         # unit tests, then the end-to-end system checks
+./run_synthetic_tests.sh --list  # just list the tests
+```
+
+Both drivers activate the `dmdc_variants` conda env, `cd` into `synthetic/`, and export `OMP_NUM_THREADS=1`
+(the per-step simulation loop is BLAS-thread bound — about 50x less CPU time on the cluster nodes) and
+`MPLBACKEND=Agg`. Run them, rather than the scripts directly, unless you want one specific figure.
+
+## Where the results are
+
+Every output path, and the command that writes it:
+
+| output | written by |
+|---|---|
+| `results/<run>/ablations.csv`, `config.json`, `provenance.json` | `run_ablation_studies.py --name <run>` |
+| `figures/ablations/<run>/results_*.png` | `plot_ablation_run_results.py --runs <run>` |
+| `figures/ablations/compare_<a>_vs_<b>/results_*.png` | `plot_ablation_run_results.py --runs <a> <b>` |
+| `figures/ablations/<run>/` — the 5 system diagnostics | `run_ablation_studies.py` (its closing `plot_diagnostics` call) |
+| `figures/diagnostics/data/` — 9 dataset diagnostics | `plot_ablation_diagnostics.py` |
+| `figures/diagnostics/data/compare_forcings.png` | `plot_forcing_comparison.py` |
+| `figures/diagnostics/system/<name>/` | `plot_system_diagnostics.py` |
+| `figures/tests/` — 8 system checks | `tests/test_synthetic_pipeline.py` |
+| `figures/reference/co2_zonal_forcing.png` | **nothing — this is an input**, the image `CO2_ZONAL_FORCING` in `system_patterns.py` was digitized from |
+
+The headline figures are in `figures/ablations/`:
+
+| figure | what it shows |
+|---|---|
+| `results_sweeps.png` | the four metrics (a)-(d) as rows, one ablation study per column, median and band over realizations, one line per method |
+| `results_phase_snr_timescale_<run>.png` | the `joint_snr_timescale` study as a phase diagram: SNR against $\tau_1$ |
+| `results_phase_change.png` | the same phase diagram, later run minus reference (written only when exactly two runs are plotted) |
+
+The metric rows are fixed (`ROW_SPECS` in `plot_ablation_run_results.py`): (a) forced pattern correlation,
+(b) forced relative RMSE, (c) slow-mode decay time $|\log(\hat\tau_1/\tau_1)|$, (d) mode shape, principal angle
+in degrees. The columns are `DEFAULT_STUDIES`; `--studies` selects any other subset of `SWEEP_STUDIES`.
+
+The 5 system diagnostics that accompany each run — `modal_overview`, `ensemble_super_spaghetti`, `forcing`,
+`forced_response_tau1`, `forced_response_shape` — show the *data*, not the fits.
+
+### Figure directory names
+
+- `figures/ablations/`: one run goes to `<run>`, several to `compare_<a>_vs_<b>[_vs_...]`. With several runs
+  the first is the reference, drawn as thin dotted medians under the others.
+- `figures/diagnostics/system/<name>/`: `<name>` is `--name` if given, else `--from-run`, else `config.slug(cfg)`
+  — `default` when the config is the default, otherwise a sanitized `config_diff` such as `n_realizations=10`.
+  Using `--study/--level` without `--name` appends `__<study>=<level>`, e.g. `default__slow_timescale_snr=100`.
+- `figures/diagnostics/data/compare_forcings.png` gains a `__<slug>` suffix under a non-default config, so the
+  default figure is never overwritten.
+
+### The runs that exist
+
+| run | config | note |
+|---|---|---|
+| `baseline` | the default config | the reference for every comparison |
+| `dip1` | `--set gauss_dip_amp=1` | a much deeper mid-century dip in the forcing |
+| `b_unscaled` | pre-$B$-scaling calibration | **not regenerated**: current code cannot reproduce it, and its CSV uses the legacy schema (no `slow_tau_log_ratio`, `slow_unstable`, `slow_angle`), so rows (c) and (d) are skipped for it |
+
+### `ablations.csv`
+
+One row per (study, level, realization, method):
+
+```
+study, param_name, param_value, snr, tau1_yr, realization, method,
+forced_corr, forced_rel_rmse, slow_eig_err, slow_tau_rel_err, slow_tau_log_ratio,
+slow_unstable, slow_angle, pair_angle
+```
+
+`realization = -1` with `method = "oracle"` is the per-level oracle row: the true $A, B$ run over the same
+forcing history, i.e. the floor set by truncating the history. `baseline` and `dip1` each hold 91 levels x
+(1 oracle + 100 realizations x 4 methods) = 36 491 rows.
+
+Each run also writes `provenance.json` — the structural values that are *not* in the config
+(`record_months`, `state_dim`, `b_scaling`) — so runs made across a structural change cannot be compared by mistake.
+
+## Scripts
+
+| script | what it does |
+|---|---|
+| `run_ablation_studies.py` | the experiment runner: fits every method on every level of every study and scores them. `--name`, `--set KEY=VALUE ...`, `--from-run`, `--studies`, `--n-jobs` (default -1, parallel over levels) |
+| `plot_ablation_run_results.py` | figures from existing `results/<run>/`. `--runs NAME [NAME ...]`, `--studies` |
+| `plot_system_diagnostics.py` | diagnostics of the system and its data, for any config or sweep level. `--set`, `--from-run`, `--study`/`--level` (together), `--plots`, `--n-shown`, `--name` |
+| `plot_ablation_diagnostics.py` | calibration and per-study dataset diagnostics. No options |
+| `plot_forcing_comparison.py` | the true AR6 forcing against the two analytic models, all centered on the record; prints an RMSE table. `--set`, `--from-run` |
+| `run_tests.py` | the unit tests, without pytest. `--only SUBSTRING`, `--list` |
+
+## Modules
+
+| module | contents |
+|---|---|
+| `config.py` | `Config`, the frozen dataclass holding every tunable value, plus `with_overrides`, `slug`, `load_config`, JSON round-trip |
+| `system_patterns.py` | latitude grid, the three structured patterns, the zonal-mean CO$_2$ forcing pattern, and `make_W` |
+| `ablation_data.py` | the core: `System`, the forcing models, simulation, the SNR budget, `SyntheticDataset`, and the `STUDIES` table of sweeps |
+| `methods.py` | thin wrappers fitting the four estimators from `utils/` on one realization |
+| `plot_style.py` | shared matplotlib style, `save`, `zero_line`, `record_span`, the forcing panels |
+
+## Configuration
+
+`config.py`'s `Config` is the single source of truth; `M = 20` and `N = 1980` months are structural and live in
+`ablation_data.py`. Override anything on the command line:
+
+```bash
+python run_ablation_studies.py --name slow50 --set tau1_yr=50 slow_variance=0.5
+python run_ablation_studies.py --name lag3 --from-run baseline --set lag=3 --studies total_snr
+python plot_system_diagnostics.py --study slow_timescale_snr --level 100
+```
+
+`--from-run <name>` loads `results/<name>/config.json` as the starting point, so any `--set` is a delta on that run.
+
+## Tests
+
+`run_tests.py` imports every `tests/test_*.py` and calls its module-level `test_*` functions — plain functions with
+asserts, no framework. It skips `tests/test_synthetic_pipeline.py`, which is not a test module but a script of
+end-to-end checks that writes `figures/tests/`; `run_synthetic_tests.sh` runs it afterwards. The checks and their
+tolerances are tabulated in the System checks table at the end of this file.
+
+## Data generation
+
+Follows the synthetic-example appendix of the paper, except for the forcing: the time series is an exponential plus
+one Gaussian dip, shaped after the AR6 CO$_2$ ERF, and the pattern is the zonal-mean CO$_2$ forcing profile (both
+replace the appendix's forcing). The code is `system_patterns.py` (patterns, modal matrix) and `ablation_data.py`
+(dynamics, forcing, simulation, sweeps).
+
+### Grid and patterns: `lat_grid`, `raw_patterns`
 $$\phi_i=-\tfrac{\pi}{2}+\tfrac{i\pi}{M-1},\quad i=0,\dots,M-1,\qquad M=20\ (\Delta\phi\approx 9.47^\circ,\ \text{poles included})$$
 $$a_1=\cos(\phi-\tfrac{\pi}{4}),\quad a_2=\operatorname{sinc}(2\phi)=\tfrac{\sin(2\pi\phi)}{2\pi\phi},\quad a_3=\frac{0.5-\cos(10\phi)}{0.5+|10\phi|},\quad b=\texttt{co2\_forcing\_pattern}(\phi)$$
 $b$ is the zonal-mean CO$_2$ radiative forcing (W m$^{-2}$), interpolated linearly in $|\phi|$ from `CO2_ZONAL_FORCING`. The table is digitized every 5° from `figures/reference/co2_zonal_forcing.png`, with north and south averaged. It runs from 2.50 at the equator to 1.54 at the poles: positive everywhere and peaked at the equator.
@@ -10,29 +141,29 @@ $$w_k=a_k/\|a_k\|_2,\qquad \hat b=b/\|b\|_2\quad(\text{no area weighting})$$
 The same convention holds downstream: `global_mean` is the plain mean over the $M$ grid points, not area weighted.
 Gram (uncentered): $w_1^\top w_2=0.396,\ w_1^\top w_3=0.329,\ w_2^\top w_3=0.278,\ \hat b^\top w_{1,2,3}=0.650,\,0.489,\,0.478$. Modal coefficients $\gamma=W^{-1}\hat b$: $0.47$ (slow), $0.23,\,0.26$ (pair), complement norm $0.68$.
 
-## Modal matrix: `make_W(M, seed=22)`
+### Modal matrix: `make_W(M, seed=22)`
 $$S=[w_1,w_2,w_3],\qquad Q_0=\text{last }M-3\text{ columns of the complete QR of }S,\qquad Q_\perp=Q_0O$$
 $O$ is Haar orthogonal: the Q factor of a Gaussian matrix, with the signs of $\operatorname{diag}(R)$ absorbed.
 $$W=[S,\ Q_\perp],\qquad W^{-1}=\begin{bmatrix}S^{+}\\ Q_\perp^\top\end{bmatrix}\quad(\text{exact since }Q_\perp^\top S=0)$$
 The complement modes are not physical. Only their aggregate properties are meaningful.
 
-## Propagator: `System.Lambda_R`, `System.A`
+### Propagator: `System.Lambda_R`, `System.A`
 $$\Lambda_R=\operatorname{blkdiag}\!\left(\lambda_1,\ \begin{bmatrix}\rho\cos\theta&\rho\sin\theta\\-\rho\sin\theta&\rho\cos\theta\end{bmatrix},\ \operatorname{diag}(\lambda_4,\dots,\lambda_M)\right),\qquad A=W\Lambda_RW^{-1}$$
 $$\sigma(A)=\{\lambda_1,\ \rho e^{\pm i\theta},\ \lambda_k\},\qquad \text{pair eigenvector}\propto w_2+iw_3$$
 $$\tau(\lambda)=-1/\ln|\lambda|\ (\text{months}),\qquad \lambda=\texttt{eigenvalue}(\tau)=e^{-1/\tau},\qquad \text{period}=2\pi/\theta$$
 
-## Model
+### Model
 $$x(t)=Ax(t-1)+B\,y(t)+\xi(t),\qquad \xi(t)\overset{iid}{\sim}\mathcal N(0,\,WDW^\top)$$
 $$z=W^{-1}x:\qquad z(t)=\Lambda_Rz(t-1)+\gamma\,y(t)+\hat\xi(t),\qquad \gamma=W^{-1}B,\quad \hat\xi\sim\mathcal N(0,D)$$
 $B$ is the scaled forcing matrix (see Forcing matrix); $\hat b$ is its unit-norm pattern.
 Simulation runs in modal coordinates (`run_modal`), and the result is mapped back by $x=Wz$.
 
-## Noise from modal variances: `System.modal_variances`, `System.noise_variances`
+### Noise from modal variances: `System.modal_variances`, `System.noise_variances`
 $$D=\operatorname{diag}(\sigma_1^2,\sigma_p^2,\sigma_p^2,\sigma_4^2,\dots,\sigma_M^2)$$
 $$s_1^2=\tfrac{\sigma_1^2}{1-\lambda_1^2},\quad s_p^2=\tfrac{\sigma_p^2}{1-\rho^2},\quad s_k^2=\tfrac{\sigma_k^2}{1-\lambda_k^2}\quad\Longleftrightarrow\quad \sigma_1^2=s_1^2(1-\lambda_1^2),\ \ \sigma_p^2=s_p^2(1-\rho^2),\ \ \sigma_k^2=s_c^2(1-\lambda_k^2)$$
 The inputs are the three target modal variances $(s_1^2,s_p^2,s_c^2)$, stored as `s1_sq`, `sp_sq`, `sc_sq`. Changing an eigenvalue recomputes $\sigma^2$, so the modal variance stays fixed.
 
-## Forcing: `centered_forcing`, `forcing_series`
+### Forcing: `centered_forcing`, `forcing_series`
 **Centering, always.** The forcing is centered on the observed interval, i.e. every month after the spin-up (the record, 1850–2014):
 $$y(t)=a\Big(F(Y_0+t/12)-\tfrac1N\textstyle\sum_{s=0}^{N-1}F(Y_0+s/12)\Big),\qquad t=-T_f,\dots,N-1$$
 - **One definition.** `centered_forcing` is the only place where the centering is done.
@@ -80,7 +211,7 @@ Outside the data, $F$ is held at its first value (for AR6, $\approx0$: a constan
   - `forced_response_tau1`: only the forced responses of the `slow_timescale_snr` datasets at $\tau_1=1,20,100$ yr, in tall panels;
   - `forced_response_shape`: the global-mean forced response and the forcing that drove it, both standardized, so only their shapes are compared (a slow mode lags the forcing and rounds its turns). The panel reports their correlation: $0.995$ at the starting point.
 
-## Forcing matrix: `System.y0`, `System.b_scale`, `System.B`
+### Forcing matrix: `System.y0`, `System.b_scale`, `System.B`
 $$y_0=y(-T_s),\qquad B=\frac{\hat b}{\|y_0\,(I-A)^{-1}\hat b\|_F},\qquad\text{so}\quad \|y_0\,(I-A)^{-1}B\|_F=1$$
 The system starts the spin-up in quasi-equilibrium with the constant past forcing $y_0$, and $B$ is scaled so that this initial state has unit norm. That fixes the scale of everything: the forced response, and through `config_budget` the noise budget too.
 
@@ -89,7 +220,7 @@ The system starts the spin-up in quasi-equilibrium with the constant past forcin
 - **$y_0$ uses the noise spin-up $T_s$, not $T_f$.** $T_f$ is $T_s$ padded out to cover the methods' history, so keying $B$ to $T_f$ would let a method setting move the generated data. The forcing is near-constant that far back, so the two agree in practice.
 - **Scale-invariant results.** Every budget except `_fixed_budget` is proportional to that level's own $V^{(f)}$, so rescaling $B$ scales the forced response, the noise and the data by one common factor, with the same random draws. All four methods are linear and every score is a ratio, so `total_snr`, `partial_snr_*`, `slow_timescale_snr`, `spatial_overlap` and `joint_snr_timescale` are **bit-identical** to the old $V^{(f)}=M$ calibration. `slow_timescale_modal_variance` is the exception: it holds the budget fixed while $V^{(f)}$ follows $\tau_1$, so its SNR inverts (see Sweeps).
 
-## Spin-up and ground truth: `System.noise_spinup`, `System.spinup`, `forced_response`, `internal_variability`
+### Spin-up and ground truth: `System.noise_spinup`, `System.spinup`, `forced_response`, `internal_variability`
 $$T_s=\max\big(\lceil 40\,\max_k\tau(\lambda_k)\rceil,\ 1200\big),\qquad T_f=\max(T_s,\ \texttt{history})$$
 The noise spin-up $T_s$ uses the longest decay time of any mode, so it still covers the pair when $\tau_1<\tau_p$. It does not depend on the history, so changing the methods' history leaves the realizations unchanged. The forcing series and the forced response start $T_f$ months before the record, which is at least as long as the forcing history passed to the method.
 $$x^{(f)}(t)=Ax^{(f)}(t-1)+B\,y(t),\quad x^{(f)}(-T_f)=0\qquad(\text{shared by all realizations})$$
@@ -98,11 +229,11 @@ Times $t<0$ are discarded. Arrays are time-major: `forced` $(N,M)$, `internal` $
 
 **Common random numbers:** `SeedSequence(seed).spawn(2)` gives separate spin-up and record streams. Every level of every sweep therefore uses the same record noise $\varepsilon(t)$, $t\ge0$, with $\hat\xi=\sqrt D\,\varepsilon$.
 
-## SNR: `theoretical_snr`, `empirical_snr`
+### SNR: `theoretical_snr`, `empirical_snr`
 $$V^{(f)}=\textstyle\sum_{i=1}^M\operatorname{Var}_t\,x^{(f)}_i(t),\qquad \mathrm{SNR}=\frac{V^{(f)}}{s_1^2+2s_p^2+(M-3)s_c^2}$$
 The empirical SNR is $V^{(f)}/\sum_i\operatorname{Var}_t x^{(i)}_i$ per realization. It scatters around the theoretical value, especially for long $\tau_1$.
 
-## Starting point: `REFERENCE`
+### Starting point: `REFERENCE`
 | | value |
 |---|---|
 | step, record | monthly, $N=1980$ (165 yr), $M=20$ |
@@ -115,7 +246,7 @@ The empirical SNR is $V^{(f)}/\sum_i\operatorname{Var}_t x^{(i)}_i$ per realizat
 | spin-up | $T_s=9601$ months |
 | realizations | `N_REALIZATIONS = 100` per configuration, seed 0 |
 
-## Sweeps
+### Sweeps
 The patterns and eigenvalue seeds are fixed in every sweep. Only the noise realizations vary.
 
 | study | swept | how |
@@ -132,18 +263,18 @@ Spatial overlap (`tilt_slow`, `pair_plane_overlap`): $u_\parallel$ and $u_\perp$
 - $c=0.457$ is the default $w_1$.
 - $w_1$ stays in $\operatorname{span}(S)$, so $Q_\perp$ is unchanged. $W^{-1}=[\operatorname{pinv}(S);Q_\perp^\top]$ is recomputed.
 
-## Fitting interface: `SyntheticDataset.forcings(history=1200)`
+### Fitting interface: `SyntheticDataset.forcings(history=1200)`
 $$\texttt{long\_forcings}=y(-\texttt{history}),\dots,y(N-1)\ \in\mathbb R^{(\texttt{history}+N)\times1},\qquad \texttt{short\_forcings}=y(0..N-1),\qquad \texttt{transition\_time}=\texttt{history}$$
 The forcing enters at the target time, which matches `PullbackDMDc` ($x_t=Ax_{t-\text{lag}}+Bf_t$), so no shift is needed. The default 100-yr history is now shorter than the 165-yr record. Its truncation error $\sim e^{-100\,\text{yr}/\tau_1}$ becomes noticeable for $\tau_1$ of a few decades.
 
-## Caveats
+### Caveats
 - **Sample variances.** For AR(1), the relative std of the sample variance over $N$ steps is $\approx\sqrt{2(1+\lambda^2)/((1-\lambda^2)N)}$, which is $0.63$ at $\tau_1=20$ yr. Mean removal also biases $\operatorname{Var}_t$ of the slow mode low.
 - **Pair identifiability.** The pair covariance is isotropic, so evaluate the pair through its plane (principal angles) and its eigenvalue, not pattern by pattern.
 - **Complement modes.** Individual modes and their forcing coefficients depend on the seed. Interpret only aggregates.
 - **Lag-$\tau$ fits.** The propagator is $A^\tau$. The fitted forcing matrix approximates $(\sum_{m<\tau}A^m)B$, so compare forced responses, not $B$.
 - **Performance.** The per-step loop is BLAS-thread bound. Run with `OMP_NUM_THREADS=1`, which is about 50× less CPU time on the cluster nodes.
 
-## System checks: `tests/test_synthetic_pipeline.py` → `figures/tests/`
+### System checks: `tests/test_synthetic_pipeline.py` → `figures/tests/`
 | check | figure(s) | asserts |
 |---|---|---|
 | `plot_system_check` | `system_check.png` | eigenvectors of $A$: slow $\parallel w_1$, pair $=c(w_2+iw_3)$ (1e-10) |
