@@ -1,8 +1,8 @@
 """Fit every method on every ablation dataset and score the forced-response and operator recovery.
 
-    python run_ablations.py                                       # results/baseline/
-    python run_ablations.py --name slow50 --set tau1_yr=50 slow_variance=0.5
-    python run_ablations.py --name lag3 --from-run baseline --set lag=3 --studies total_snr
+    python run_ablation_studies.py                                       # results/baseline/
+    python run_ablation_studies.py --name slow50 --set tau1_yr=50 slow_variance=0.5
+    python run_ablation_studies.py --name lag3 --from-run baseline --set lag=3 --studies total_snr
 
 Each run writes results/<name>/config.json and results/<name>/ablations.csv (one row per study, level,
 realization and method; the oracle forced response, true A and b over the same history, is one row per level
@@ -10,19 +10,37 @@ with method "oracle"), plus the system diagnostics of its reference system in fi
 """
 
 import argparse
-import pathlib
+import json
 
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, parallel_backend
 
-from ablations import decay_time, study_levels
-from config import DEFAULT, config_diff, to_json
+from ablation_data import M, N, decay_time, decay_time_yr, drive_modal, study_levels
+from config import DEFAULT, RESULTS_DIR, config_diff, load_config, to_json
 from methods import make_methods
-from plot_system import RESULTS_DIR, load_config, plot_diagnostics, reference_dataset
-from test import oracle_forced, plane_cosines, rms, slow_index
+from plot_ablation_run_results import FIGURES_DIR
+from plot_system_diagnostics import plot_diagnostics, reference_dataset
 
-FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "ablations"
+
+def rms(a):
+    return np.sqrt((a**2).mean())
+
+
+def plane_cosines(U, V):
+    return np.linalg.svd(np.linalg.qr(U)[0].T @ np.linalg.qr(V)[0], compute_uv=False)
+
+
+def slow_index(eigvals, lam1):
+    real = np.where(np.abs(eigvals.imag) < 1e-12)[0]
+    return real[np.argmin(np.abs(eigvals[real] - lam1))]
+
+
+def oracle_forced(ds):
+    """The forced response the true A and B give over the same history: the floor set by truncating it."""
+    s = ds.system
+    long_forcings, _, history = ds.forcings()
+    return drive_modal(s, long_forcings[:, 0])[history:] @ s.W.T
 
 
 def slow_eig_err(eigvals, lam1):
@@ -32,10 +50,10 @@ def slow_eig_err(eigvals, lam1):
 
 def pair_angle(eigvals, eigvecs, pair_eig, W_pair):
     """Largest principal angle (degrees) between span(w2, w3) and the plane of the eigenvector nearest the pair."""
-    complex_ = np.where(eigvals.imag > 1e-12)[0]
-    if len(complex_) == 0:
+    oscillating = np.where(eigvals.imag > 1e-12)[0]
+    if len(oscillating) == 0:
         return np.nan
-    v = eigvecs[:, complex_[np.argmin(np.abs(eigvals[complex_] - pair_eig))]]
+    v = eigvecs[:, oscillating[np.argmin(np.abs(eigvals[oscillating] - pair_eig))]]
     cosines = plane_cosines(W_pair, np.column_stack([v.real, v.imag]))
     return np.rad2deg(np.arccos(np.clip(cosines.min(), -1, 1)))
 
@@ -62,7 +80,7 @@ def score(ds, forced_est, A=None, lag=1):
 def run_level(study, make, cfg=DEFAULT):
     (ds,) = make()
     meta = dict(study=study, param_name=ds.param_name, param_value=ds.param_value,
-                snr=ds.snr, tau1_yr=decay_time(ds.system.lam1) / 12)
+                snr=ds.snr, tau1_yr=decay_time_yr(ds.system.lam1))
     rows = [dict(meta, realization=-1, method="oracle", **score(ds, oracle_forced(ds)))]
     long_forcings, short_forcings, history = ds.forcings()
     methods = make_methods(cfg)
@@ -94,8 +112,12 @@ def main():
     out_dir = RESULTS_DIR / args.name
     out_dir.mkdir(parents=True, exist_ok=True)
     to_json(cfg, out_dir / "config.json")
+    # N and M are structural, so they are not in the config: record them here, or runs made before a
+    # structural change silently compare against runs made after it.
+    (out_dir / "provenance.json").write_text(json.dumps(
+        {"record_months": N, "state_dim": M, "b_scaling": "||y0 (I - A)^-1 B||_F = 1"}, indent=2) + "\n")
     pd.DataFrame([row for rows in results for row in rows]).to_csv(out_dir / "ablations.csv", index=False)
-    print(f"saved {out_dir}/config.json, ablations.csv")
+    print(f"saved {out_dir}/config.json, provenance.json, ablations.csv")
     plot_diagnostics(reference_dataset(cfg), FIGURES_DIR / args.name, label=config_diff(cfg), cfg=cfg)
 
 

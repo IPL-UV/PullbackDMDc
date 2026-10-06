@@ -1,7 +1,7 @@
-"""Figures for ablation runs (results/<run>/ from run_ablations.py), written to figures/ablations/.
+"""Figures for ablation runs (results/<run>/ from run_ablation_studies.py), written to figures/ablations/.
 
-    python plot_ablation_results.py --runs baseline                # figures/ablations/baseline/
-    python plot_ablation_results.py --runs baseline slow50         # figures/ablations/compare_baseline_vs_slow50/
+    python plot_ablation_run_results.py --runs baseline                # figures/ablations/baseline/
+    python plot_ablation_run_results.py --runs baseline slow50         # figures/ablations/compare_baseline_vs_slow50/
 
 With several runs the first is the reference: thin dotted medians under the later runs' solid lines and bands.
 With exactly two runs a third figure maps the change in the phase diagram (later run minus reference).
@@ -19,9 +19,8 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import plot_style  # noqa: F401  (sets the shared rcParams)
-from config import Config, config_diff, from_json
-from plot_system import RESULTS_DIR
+from config import RESULTS_DIR, Config, config_diff, from_json
+from plot_style import save
 from utils.params import colors, method_markers
 
 FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "ablations"
@@ -72,8 +71,8 @@ def load_run(name):
 
 
 def quantiles(df, metric):
-    g = df.groupby("param_value")[metric]
-    return pd.DataFrame(dict(median=g.median(), lo=g.quantile(0.25), hi=g.quantile(0.75)))
+    grouped = df.groupby("param_value")[metric]
+    return pd.DataFrame(dict(median=grouped.median(), lo=grouped.quantile(0.25), hi=grouped.quantile(0.75)))
 
 
 def plot_band(ax, df, metric, method, label=None, linestyle="-"):
@@ -138,20 +137,20 @@ def plot_sweeps(runs, path):
     axes[0, 2].set_title("(c) operator recovery")
     handles, labels = axes[0, 1].get_legend_handles_labels()
     unique = dict(zip(labels, handles))
-    axes[0, 1].legend(unique.values(), unique.keys(), fontsize=7)
-    axes[0, 2].legend(fontsize=7)
+    axes[0, 1].legend(unique.values(), unique.keys())
+    axes[0, 2].legend()
     if reference is not None:
         run_handles = [Line2D([], [], color="k", **REFERENCE_STYLE)] + [
             Line2D([], [], color="k", linestyle=ls) for _, ls in zip(variants, VARIANT_LINESTYLES)]
         run_labels = [f"{reference.label()} (reference)"] + [r.label(reference) for r in variants]
-        fig.legend(run_handles, run_labels, loc="upper center", ncol=len(runs), fontsize=8, frameon=False)
+        fig.legend(run_handles, run_labels, loc="upper center", ncol=len(runs), frameon=False)
     else:
-        fig.suptitle(variants[0].label(), fontsize=9)
+        fig.suptitle(variants[0].label())
     fig.text(0.5, 0.002, "median over realizations, shaded: interquartile range. (c) scores the eigen-decomposition "
              "of the fitted lag-step propagator; LIM-opt's forced estimate uses the SVD of its powered propagator, "
              "not these modes.", ha="center", fontsize=7, wrap=True)
     fig.tight_layout(rect=(0, 0.015, 1, 0.985))
-    save(fig, path)
+    save(fig, path, tight=False, bbox="tight")
 
 
 def joint_results(run):
@@ -171,12 +170,13 @@ def phase_axes(n_rows, n_methods):
 
 
 def label_phase_axes(ax, grid, method):
-    centers = np.arange(grid.shape[1]) + 0.5, np.arange(grid.shape[0]) + 0.5
-    ax.set_title(method, fontsize=9)
-    ax.set_xticks(centers[0], [f"{t:g}" for t in grid.columns])
-    ax.set_yticks(centers[1], [f"{s:.2g}" for s in grid.index])
+    """Tick the tau1 columns and SNR rows; returns the cell centers the contour overlays are drawn on."""
+    x_centers, y_centers = np.arange(grid.shape[1]) + 0.5, np.arange(grid.shape[0]) + 0.5
+    ax.set_title(method)
+    ax.set_xticks(x_centers, [f"{tau:g}" for tau in grid.columns])
+    ax.set_yticks(y_centers, [f"{snr:.2g}" for snr in grid.index])
     ax.grid(False)
-    return centers
+    return x_centers, y_centers
 
 
 def plot_phase(run, path):
@@ -184,24 +184,27 @@ def plot_phase(run, path):
     if df.empty:
         return
     fig, axes = phase_axes(len(PHASE_PANELS), len(run.methods))
+    overlays = {m: tuple(phase_grid(df[df.method == m], metric)
+                         for metric in ("forced_corr", "forced_rel_rmse")) for m in run.methods}
     for row, (metric, title, cmap, (vmin, vmax)) in zip(axes, PHASE_PANELS):
         grids = {m: phase_grid(df[df.method == m], metric) for m in run.methods}
         values = np.concatenate([g.values.ravel() for g in grids.values()])
         vmin = values.min() if vmin is None else vmin
         vmax = min(values.max(), 2) if vmax is None else vmax
         for ax, method in zip(row, run.methods):
-            corr, rmse = (phase_grid(df[df.method == method], m) for m in ("forced_corr", "forced_rel_rmse"))
+            corr_grid, rmse_grid = overlays[method]
             mesh = ax.pcolormesh(grids[method].values, cmap=cmap, vmin=vmin, vmax=vmax)
             centers = label_phase_axes(ax, grids[method], method)
-            ax.contour(*centers, corr.values, levels=[0.9], colors="k", linewidths=1.2)
-            ax.contour(*centers, rmse.values, levels=[RMSE_THRESHOLD], colors="k", linewidths=1.2, linestyles="--")
+            ax.contour(*centers, corr_grid.values, levels=[0.9], colors="k", linewidths=1.2)
+            ax.contour(*centers, rmse_grid.values, levels=[RMSE_THRESHOLD], colors="k", linewidths=1.2,
+                       linestyles="--")
         row[0].set_ylabel("SNR")
         fig.colorbar(mesh, ax=row, label=title, fraction=0.03, pad=0.02)
     for ax in axes[-1]:
         ax.set_xlabel(r"$\tau_1$ (yr)")
-    fig.suptitle(f"{run.label()}\nmedian over realizations; solid: corr = 0.9, dashed: rel. RMSE = {RMSE_THRESHOLD:g}",
-                 fontsize=9)
-    save(fig, path)
+    fig.suptitle(f"{run.label()}\nmedian over realizations; "
+                 f"solid: corr = 0.9, dashed: rel. RMSE = {RMSE_THRESHOLD:g}")
+    save(fig, path, tight=False, bbox="tight")
 
 
 def plot_phase_change(reference, variant, path):
@@ -214,7 +217,7 @@ def plot_phase_change(reference, variant, path):
     for row, (metric, title, _, _), cmap in zip(axes, PHASE_PANELS, ("RdBu", "RdBu_r")):
         deltas = {m: phase_grid(var[var.method == m], metric) - phase_grid(ref[ref.method == m], metric)
                   for m in methods}
-        limit = np.nanmax([np.abs(d.values).max() for d in deltas.values()]) or 1.0
+        limit = np.nanmax([np.abs(delta.values).max() for delta in deltas.values()]) or 1.0
         for ax, method in zip(row, methods):
             mesh = ax.pcolormesh(deltas[method].values, cmap=cmap, vmin=-limit, vmax=limit)
             label_phase_axes(ax, deltas[method], method)
@@ -222,14 +225,8 @@ def plot_phase_change(reference, variant, path):
         fig.colorbar(mesh, ax=row, label=f"change in {title}", fraction=0.03, pad=0.02)
     for ax in axes[-1]:
         ax.set_xlabel(r"$\tau_1$ (yr)")
-    fig.suptitle(f"{variant.label(reference)} minus {reference.name}: change in median (blue: better)", fontsize=9)
-    save(fig, path)
-
-
-def save(fig, path):
-    fig.savefig(path, bbox_inches="tight", dpi=150)
-    plt.close(fig)
-    print(f"saved {path}")
+    fig.suptitle(f"{variant.label(reference)} minus {reference.name}: change in median (blue: better)")
+    save(fig, path, tight=False, bbox="tight")
 
 
 def main():

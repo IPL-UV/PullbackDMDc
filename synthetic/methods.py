@@ -12,9 +12,9 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from ablations import M
+from ablation_data import M
 from config import DEFAULT
-from test import fit_pullback
+from utils.pullback_dmdc import PullbackDMDc
 from utils.lim import LIM
 from utils.lim_opt import LIM_opt
 from utils.lr import LR
@@ -22,6 +22,14 @@ from utils.lr import LR
 
 def identity_eofs(data):
     return {"data_mean": np.zeros(M), "eofs": np.eye(M), "pcs": data}
+
+
+def fit_pullback(data, long_forcings, short_forcings, history, lag=1):
+    model = PullbackDMDc(truncation=M, lag=lag, transition_time=history)
+    model.fit(data, short_forcings=short_forcings, long_forcings=long_forcings,
+              precomputed_eofs=identity_eofs(data))
+    model.compute_modes()
+    return model
 
 
 def fit_pullback_dmdc(data, long_forcings, short_forcings, history, lag=1):
@@ -43,7 +51,7 @@ def fit_lim_opt(data, *_, lag=1, optlag=DEFAULT.optlag):
     return model.predict(), svals[:, None] * model.M.T / svals[None, :]
 
 
-def fit_lr(data, long_forcings, short_forcings, history):
+def fit_lr(data, _long_forcings, short_forcings, *_):
     model = LR(truncation=M)
     model.fit(data, short_forcings, precomputed_eofs=identity_eofs(data))
     return model.predict(), None

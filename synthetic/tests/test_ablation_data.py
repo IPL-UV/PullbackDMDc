@@ -1,12 +1,14 @@
-"""Tests for the ablation data generators. Run with `python test_ablations.py` (names are pytest-compatible)."""
+"""Tests for ablation data and parameter sweeps."""
 
 from dataclasses import replace
 
 import numpy as np
 
-from ablations import (
-    B_HAT,
+from ablation_data import (
+    M,
     BASE_OVERLAP,
+    W_INV_REF,
+    W_REF,
     HISTORY,
     MODE_OVERLAPS,
     N,
@@ -17,13 +19,11 @@ from ablations import (
     REFERENCE_BUDGET,
     SLOW_TIMESCALES_YR,
     TOTAL_SNRS,
-    UNIT_FORCING_REFERENCE,
-    W_INV_REF,
-    W_REF,
     decay_time,
-    eigenvalue,
+    eigenvalue_yr,
     forced_response,
     forced_variance,
+    equal_budget,
     make_dataset,
     modal_coordinates,
     pair_plane_overlap,
@@ -32,8 +32,7 @@ from ablations import (
     spatial_overlap_sweep,
     total_snr_sweep,
 )
-
-SMALL = dict(n_realizations=2)
+from support import SMALL, assert_unit_b_scale
 
 
 def all_sweeps(**kwargs):
@@ -43,17 +42,6 @@ def all_sweeps(**kwargs):
         + slow_timescale_sweep(hold="snr", **kwargs) + slow_timescale_sweep(hold="modal_variance", **kwargs)
         + spatial_overlap_sweep(**kwargs)
     )
-
-
-def test_patterns():
-    assert np.allclose(np.linalg.norm(W_REF, axis=0), 1)
-    assert np.abs(W_INV_REF @ W_REF - np.eye(len(W_REF))).max() < 1e-12
-    assert np.abs(W_REF[:, :3].T @ W_REF[:, 3:]).max() < 1e-12
-    gram = np.column_stack([W_REF[:, :3], B_HAT])
-    gram = gram.T @ gram
-    expected = {(0, 1): 0.396, (0, 2): 0.329, (1, 2): 0.278, (3, 0): 0.650, (3, 1): 0.489, (3, 2): 0.478}
-    for (i, j), value in expected.items():
-        assert abs(gram[i, j] - value) < 5e-4, (i, j, gram[i, j])
 
 
 def test_eigenvalues():
@@ -82,11 +70,11 @@ def test_slow_timescale():
 def test_structure():
     for ds in all_sweeps(**SMALL):
         s = ds.system
-        assert ds.forced.shape == (N, 20) and ds.internal.shape == (SMALL["n_realizations"], N, 20)
+        assert ds.forced.shape == (N, M) and ds.internal.shape == (SMALL["n_realizations"], N, 20)
         assert ds.y.shape == (s.spinup + N,)
         assert np.abs(ds.data - (ds.forced + ds.internal)).max() < 1e-12
         y = ds.y[s.spinup:]
-        assert np.abs(ds.forced[1:] - (ds.forced[:-1] @ s.A.T + np.outer(y[1:], s.b))).max() < 1e-10
+        assert np.abs(ds.forced[1:] - (ds.forced[:-1] @ s.A.T + np.outer(y[1:], s.B))).max() < 1e-10
         assert abs(y.mean()) < 1e-12
         long_forcings, short_forcings, transition_time = ds.forcings()
         assert transition_time == HISTORY and long_forcings.shape == (HISTORY + N, 1)
@@ -100,13 +88,17 @@ def test_spinup():
         assert np.exp(-s.spinup / decay_time(s.eigvals).max()) < 1e-15, (ds.study, ds.param_value)
 
 
-def test_forced_variance_scale():
-    V_f = forced_variance(forced_response(UNIT_FORCING_REFERENCE)[1])
-    fast = replace(UNIT_FORCING_REFERENCE, lam1=eigenvalue(12 * 0.84))
+def test_b_scaling():
+    """B is b scaled so the initial quasi-equilibrium state has unit norm, at every level of every sweep."""
+    for ds in all_sweeps(**SMALL) + [make_dataset(REFERENCE, equal_budget, **SMALL)]:
+        s = ds.system
+        assert_unit_b_scale(s)
+        assert abs(np.linalg.norm(s.b) - 1) < 1e-12  # b itself stays the raw unit pattern
+    V_f = forced_variance(forced_response(REFERENCE)[1])
+    fast = replace(REFERENCE, lam1=eigenvalue_yr(0.84))
     V_f_fast = forced_variance(forced_response(fast)[1])
-    print(f"    unit-forcing V_f: {V_f:.4g} at tau_1 = 20 yr, {V_f_fast:.4g} at 0.84 yr (default exp + dip forcing, 1915-2014)")
-    assert abs(V_f / 1.287e3 - 1) < 1e-3 and abs(V_f_fast / 8.018 - 1) < 1e-3
-    assert abs(forced_variance(forced_response(REFERENCE)[1]) - 20) < 1e-9
+    # golden values: V_f of the default exp + dip forcing over 1850-2014, under the B scaling
+    assert abs(V_f / 0.2654566 - 1) < 1e-3 and abs(V_f_fast / 0.5777657 - 1) < 1e-3
 
 
 def test_modal_variances():
@@ -147,15 +139,3 @@ def test_common_random_numbers():
     ref = sweep[0].internal / np.sqrt(sweep[0].system.s1_sq)
     for ds in sweep[1:]:
         assert np.abs(ds.internal / np.sqrt(ds.system.s1_sq) - ref).max() < 1e-10, ds.param_value
-
-
-def main():
-    tests = [(name, fn) for name, fn in globals().items() if name.startswith("test_") and callable(fn)]
-    for name, fn in tests:
-        fn()
-        print(f"  passed  {name}")
-    print(f"{len(tests)} tests passed")
-
-
-if __name__ == "__main__":
-    main()

@@ -8,7 +8,7 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from ablations import (
+from ablation_data import (
     M,
     N,
     PHI,
@@ -17,50 +17,25 @@ from ablations import (
     decay_time,
     equal_budget,
     make_dataset,
-    modal_coordinates,
-    run_modal,
+    annual_years,
+    record_years,
 )
-from plot_ablations import annual, lat_label
-from utils.pullback_dmdc import PullbackDMDc
+from plot_ablation_diagnostics import annual, lat_label
+from methods import fit_pullback
+from run_ablation_studies import plane_cosines, rms, slow_index
+from plot_system_diagnostics import plot_modal_overview
+from plot_style import save, zero_line
+from support import noise_free_white_forcing, oracle_forced, recovery_metrics
 
-FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "tests"
+FIGURES_DIR = pathlib.Path(__file__).resolve().parents[1] / "figures" / "tests"
 
 ENSEMBLE_STATE_INDICES = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
 LAT = np.rad2deg(PHI)
-YEARS = np.arange(N // 12) + 0.5
-
-
-def rms(a):
-    return np.sqrt((a**2).mean())
-
-
-def plane_cosines(U, V):
-    return np.linalg.svd(np.linalg.qr(U)[0].T @ np.linalg.qr(V)[0], compute_uv=False)
 
 
 def unit_aligned(v, ref):
     v = v / np.linalg.norm(v)
     return v * np.sign(v @ ref)
-
-
-def fit_pullback(data, long_forcings, short_forcings, transition_time, lag=1):
-    model = PullbackDMDc(truncation=M, lag=lag, transition_time=transition_time)
-    model.fit(data, short_forcings=short_forcings, long_forcings=long_forcings,
-              precomputed_eofs={"data_mean": np.zeros(M), "eofs": np.eye(M), "pcs": data})
-    model.compute_modes()
-    return model
-
-
-def slow_index(eigvals, lam1):
-    real = np.where(np.abs(eigvals.imag) < 1e-12)[0]
-    return real[np.argmin(np.abs(eigvals[real] - lam1))]
-
-
-def save(fig, path):
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    print(f"saved {path}")
 
 
 def plot_system_check(out_path):
@@ -96,7 +71,7 @@ def plot_system_check(out_path):
     axes[1].set_title("Eigenvectors of A (x) vs patterns (lines)")
 
     for ax in axes[:2]:
-        ax.axhline(0, color="k", linewidth=0.5)
+        zero_line(ax)
         ax.set_xlabel("latitude (deg)")
         ax.legend(fontsize=8)
 
@@ -126,10 +101,11 @@ def plot_ensemble_spaghetti(out_path, n_realizations=10):
     ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations)
     fig, axes = plt.subplots(len(ENSEMBLE_STATE_INDICES), 1, figsize=(8, 1.3 * len(ENSEMBLE_STATE_INDICES)),
                              sharex=True)
+    years = annual_years(ds.system)
     for ax, i in zip(axes, ENSEMBLE_STATE_INDICES[::-1]):
         for member in annual(ds.data[:, :, i], axis=-1):
-            ax.plot(YEARS, member, linewidth=0.7, alpha=0.7)
-        ax.plot(YEARS, annual(ds.forced[:, i], axis=-1), color="k", linewidth=1.5)
+            ax.plot(years, member, linewidth=0.7, alpha=0.7)
+        ax.plot(years, annual(ds.forced[:, i], axis=-1), color="k", linewidth=1.5)
         ax.set_ylabel(lat_label(i))
     axes[-1].set_xlabel("year")
     fig.suptitle(f"{n_realizations} realizations (annual means), forced in black, SNR {ds.snr:.3g}")
@@ -137,11 +113,7 @@ def plot_ensemble_spaghetti(out_path, n_realizations=10):
 
 
 def check_dmdc_recovery(out_path, n_steps=20000, tol=1e-8):
-    s = REFERENCE
-    rng = np.random.default_rng(0)
-    y = rng.standard_normal(s.spinup + n_steps)
-    z = run_modal(s.Lambda_R, np.outer(y, s.W_inv @ s.b), z0=s.W_inv @ rng.standard_normal(M))
-    data = z[s.spinup:] @ s.W.T
+    s, y, data = noise_free_white_forcing(n_steps)
 
     model = fit_pullback(data, y[:, None], y[s.spinup:, None], s.spinup)
     patterns = model.compute_rotated_modes()["spatial_patterns"]
@@ -157,7 +129,7 @@ def check_dmdc_recovery(out_path, n_steps=20000, tol=1e-8):
     errors = {
         "slow eigenvalue": abs(eigvals[k_slow] - s.lam1),
         "pair eigenvalue": min(abs(eigvals[k_pair] - pair_true), abs(np.conj(eigvals[k_pair]) - pair_true)),
-        "B vs b_hat": np.abs(model.B.ravel() - s.b).max(),
+        "B vs B_true": np.abs(model.B.ravel() - s.B).max(),
         "slow mode shape": 1 - abs(slow_mode @ s.W[:, 0]),
         "pair mode plane": 1 - plane_cosines(pair_plane, s.W[:, 1:3]).min(),
     }
@@ -176,7 +148,7 @@ def check_dmdc_recovery(out_path, n_steps=20000, tol=1e-8):
     axes[0].set_aspect("equal")
     axes[0].set_title("Eigenvalues")
 
-    axes[1].plot(LAT, s.b, marker="o", label=r"true $\hat b$")
+    axes[1].plot(LAT, s.B, marker="o", label=r"true $B$")
     axes[1].plot(LAT, model.B.ravel(), marker="x", linestyle="--", label="recovered B")
     axes[1].set_title("Forcing pattern")
 
@@ -192,7 +164,7 @@ def check_dmdc_recovery(out_path, n_steps=20000, tol=1e-8):
                      label="projected on recovered plane")
     axes[3].set_title("Pair patterns vs recovered plane")
     for ax in axes[1:]:
-        ax.axhline(0, color="k", linewidth=0.5)
+        zero_line(ax)
         ax.set_xlabel("latitude (deg)")
     for ax in axes:
         ax.legend(fontsize=8)
@@ -213,51 +185,10 @@ def direct_simulation(ds, seed, n_direct):
     x = np.zeros((n_direct, M))
     X = np.empty((N, n_direct, M))
     for t in range(s.spinup + N):
-        x = x @ s.A.T + ds.y[t] * s.b + xi[t]
+        x = x @ s.A.T + ds.y[t] * s.B + xi[t]
         if t >= s.spinup:
             X[t - s.spinup] = x
     return X.transpose(1, 0, 2)
-
-
-def plot_modal_overview(ds, out_path, n_shown):
-    s = ds.system
-    z = modal_coordinates(ds, ds.data)
-    z_forced = modal_coordinates(ds, ds.forced)
-    z_internal = modal_coordinates(ds, ds.internal)
-    taus = decay_time(s.eigvals) / 12
-    names = (rf"slow mode $z_1$ ($\tau_1$={taus[0]:.3g} yr)",
-             rf"pair $z_2$ ($\tau_p$={taus[1]:.3g} yr, period {2 * np.pi / s.theta / 12:.3g} yr)")
-
-    fig, axes = plt.subplots(2, 3, figsize=(14, 6.5))
-    axes[0, 0].plot(np.arange(N) / 12, ds.y[s.spinup:], color="C0")
-    axes[0, 0].set_title("(a) forcing $y(t)$")
-    for k, name in enumerate(names):
-        full, internal = axes[0, k + 1], axes[1, k]
-        for member, member_internal in zip(annual(z[:n_shown, :, k], axis=-1),
-                                           annual(z_internal[:n_shown, :, k], axis=-1)):
-            full.plot(YEARS, member, linewidth=0.7, alpha=0.7)
-            internal.plot(YEARS, member_internal, linewidth=0.7, alpha=0.7)
-        full.plot(YEARS, annual(z[:, :, k].mean(axis=0), axis=-1), color="C0", linestyle="--", linewidth=1.5,
-                  label=f"mean of {len(z)}", zorder=3)
-        full.plot(YEARS, annual(z_forced[:, k], axis=-1), color="k", linewidth=2.5, label="forced", zorder=4)
-        internal.axhline(0, color="k", linewidth=0.8, linestyle="--")
-        internal.sharey(full)
-        full.set_title(f"({'bc'[k]}) {name}")
-        internal.set_title(f"({'de'[k]}) internal variability, {name.split(' (')[0]}")
-        full.legend(fontsize=8)
-
-    for j, name in enumerate((r"$w_1$ slow", r"$w_2$ pair", r"$w_3$ pair")):
-        axes[1, 2].plot(LAT, s.W[:, j], marker="o", label=name)
-    axes[1, 2].plot(LAT, s.b, marker="D", color="k", linestyle="--", label=r"$\hat b$ forcing")
-    axes[1, 2].axhline(0, color="k", linewidth=0.5)
-    axes[1, 2].set_xlabel("latitude (deg)")
-    axes[1, 2].set_title("(f) spatial patterns")
-    axes[1, 2].legend(fontsize=8)
-    for ax in (*axes[0], *axes[1, :2]):
-        ax.set_xlabel("year")
-    fig.suptitle(f"Modal coordinates $z = W^{{-1}}x$, {n_shown} of {len(z)} realizations (annual means), "
-                 f"SNR {ds.snr:.3g}")
-    save(fig, out_path)
 
 
 def check_forced_internal_split(spaghetti_path, convergence_path, modal_path, n_realizations=256, seed=0,
@@ -280,11 +211,12 @@ def check_forced_internal_split(spaghetti_path, convergence_path, modal_path, n_
     n_shown = 10
     fig, axes = plt.subplots(len(ENSEMBLE_STATE_INDICES), 3, figsize=(13, 1.3 * len(ENSEMBLE_STATE_INDICES)),
                              sharex=True, sharey="row")
+    years = annual_years(ds.system)
     for row, i in enumerate(ENSEMBLE_STATE_INDICES[::-1]):
         for full, internal in zip(annual(ds.data[:n_shown, :, i], axis=-1), annual(ds.internal[:n_shown, :, i], axis=-1)):
-            axes[row, 0].plot(YEARS, full, linewidth=0.7, alpha=0.7)
-            axes[row, 2].plot(YEARS, internal, linewidth=0.7, alpha=0.7)
-        axes[row, 1].plot(YEARS, annual(ds.forced[:, i], axis=-1), color="C1", linewidth=1.2)
+            axes[row, 0].plot(years, full, linewidth=0.7, alpha=0.7)
+            axes[row, 2].plot(years, internal, linewidth=0.7, alpha=0.7)
+        axes[row, 1].plot(years, annual(ds.forced[:, i], axis=-1), color="C1", linewidth=1.2)
         axes[row, 0].set_ylabel(lat_label(i))
     for col, title in enumerate(("full signal", "forced response", "internal variability")):
         axes[0, col].set_title(title)
@@ -315,47 +247,20 @@ def check_forced_internal_split(spaghetti_path, convergence_path, modal_path, n_
         f"ensemble mean at K={counts[-1]} is {mean_errors[-1] / rms_forced:.1%} of rms forced")
 
 
-def oracle_forced(ds):
-    s = ds.system
-    long_forcings, _, history = ds.forcings()
-    z = run_modal(s.Lambda_R, np.outer(long_forcings[:, 0], s.W_inv @ s.b))
-    return z[history:] @ s.W.T
-
-
-def recovery_metrics(ds):
-    long_forcings, short_forcings, history = ds.forcings()
-    rows = []
-    for data, internal in zip(ds.data, ds.internal):
-        model = fit_pullback(data, long_forcings, short_forcings, history)
-        forced_est = model.predict()
-        internal_est = data - forced_est
-        rows.append(dict(
-            forced_corr=np.corrcoef(forced_est.ravel(), ds.forced.ravel())[0, 1],
-            forced_err=rms(forced_est - ds.forced) / rms(ds.forced),
-            internal_err=rms(internal_est - internal) / rms(internal),
-            mirror=np.abs((forced_est - ds.forced) + (internal_est - internal)).max(),
-            slow_eig=model.eigvals[slow_index(model.eigvals, ds.system.lam1)].real,
-            forced_mse=((forced_est - ds.forced) ** 2).mean(axis=0),
-            internal_mse=((internal_est - internal) ** 2).mean(axis=0),
-            forced_est=forced_est,
-        ))
-    return {k: np.array([r[k] for r in rows]) for k in rows[0]}
-
-
 def check_forced_internal_recovery(spaghetti_path, mse_path, n_realizations=100, zoom_years=25):
     ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations)
     m = recovery_metrics(ds)
     oracle_err = rms(oracle_forced(ds) - ds.forced) / rms(ds.forced)
 
     print(f"--- forced/internal recovery: starting point, SNR {ds.snr:.3g}, {n_realizations} realizations ---")
-    print(f"  oracle (true A, b; 100-yr history) forced rms error {oracle_err:.2e}")
+    print(f"  oracle (true A, B; 100-yr history) forced rms error {oracle_err:.2e}")
     for key, name, fmt in (("forced_corr", "corr forced", ".4f"), ("forced_err", "forced rms error", ".2%"),
                            ("internal_err", "internal rms error", ".2%"), ("slow_eig", "slow eigenvalue", ".5f")):
         q25, q50, q75 = np.percentile(m[key], [25, 50, 75])
         print(f"  {name:<20s} median {q50:{fmt}}  (IQR {q25:{fmt}} - {q75:{fmt}})")
     print(f"  true slow eigenvalue {REFERENCE.lam1:.5f}  (skill reported, not asserted)")
 
-    t = np.arange(N) / 12
+    t = record_years(ds.system)
     zoom = 12 * zoom_years
     fig, axes = plt.subplots(len(ENSEMBLE_STATE_INDICES), 3, figsize=(14, 1.3 * len(ENSEMBLE_STATE_INDICES)),
                              sharey="row")

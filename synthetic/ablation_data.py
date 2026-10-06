@@ -1,14 +1,13 @@
 """Synthetic datasets for the ablation studies: total SNR, partial SNR, slow timescale and spatial overlap.
 
-Every tunable value lives in config.Config; the module-level constants below are the DEFAULT config's values,
-kept so existing scripts can import them.
+Every tunable value lives in config.Config; the module-level constants below are the DEFAULT config's values.
 """
 
 import pathlib
 import sys
 from dataclasses import dataclass, replace
-from functools import lru_cache, partial
-from typing import Tuple
+from functools import cached_property, lru_cache, partial
+from typing import Callable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -18,10 +17,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from config import DEFAULT
 from data_preparation.interpolate_full_forcing import interpolate
-from synthetic_system import make_W
+from system_patterns import make_W
 
 M = 20
-N = 1200
+N = 1980  # record length in months: Jan 1850 - Dec 2014, as in the real-data experiments
 SPINUP_DECAY_TIMES = 40
 SPINUP_CHUNK = 1200
 MIN_NOISE_SPINUP = 1200
@@ -31,17 +30,11 @@ SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 HISTORY = DEFAULT.history
 RECORD_END_YEAR = DEFAULT.record_end_year
 AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
-# The forcing is always centered on the observed interval (centered_forcing); the fits below are its provenance,
-# the config defaults are rounded or chosen values (exp: efold 60 yr; exp + dip: efold 65 yr, dip 0.25 at 1965,
-# sigma 15 yr, no bump).
-# F(t) = c + a exp((t - 2014) / efold) least-squares fitted to the annual AR6 CO2 ERF, 1750-2019 (values at
-# mid-year); efold = 100 / k yr. RMSE 0.038 W m^-2 (0.056 over 1915-2014). Constant c in the past.
+# Least-squares fits to the annual AR6 CO2 ERF, 1750-2019; see DATA_GENERATION.md for their quality and for how
+# the config defaults round them. The forcing is always centered on the record (centered_forcing).
 CO2_FIT = dict(c=0.019123072547470428, a=1.9152644964970247, k=1.6709321713250902)
 CO2_FIT_REFERENCE_YEAR = 2014
 FORCING_EFOLD_YR = DEFAULT.forcing_efold_yr
-# exp + one positive and one negative Gaussian, least-squares fitted to the same AR6 CO2 values: RMSE 0.0092 W m^-2
-# (0.0101 over 1915-2014), against 0.038 (0.055) for the plain exp; the Gaussians capture the bump near 1921 and the
-# dip near 1966. Constant c in the past (|F - c| < 3e-4 of the rise before 1500).
 CO2_GAUSS_FIT = dict(c=-0.005366940477657721, a=1.9642341976276356, k=1.5819078313533055,
                      A_pos=0.04816339012920922, mu_pos=1921.3285060598805, sigma_pos=17.8812620771011,
                      A_neg=0.13721889229450532, mu_neg=1966.0271283481388, sigma_neg=14.114214602524019)
@@ -50,11 +43,6 @@ GAUSS_FIELDS = ("gauss_efold_yr", "gauss_bump_amp", "gauss_bump_year", "gauss_bu
                 "gauss_dip_amp", "gauss_dip_year", "gauss_dip_width_yr")
 FILE_TREND_YEARS = 10  # after a forcing file's data ends, the forcing continues its trend over these last years
 N_REALIZATIONS = DEFAULT.n_realizations
-PATTERN_SEED = DEFAULT.pattern_seed
-EIGENVALUE_SEED = DEFAULT.eigenvalue_seed
-COMPLEMENT_EIG_RANGE = DEFAULT.complement_eig_range
-TAU1_YR = DEFAULT.tau1_yr
-TAU_P_YR = DEFAULT.tau_p_yr
 PERIOD_P_YR = DEFAULT.period_p_yr
 TOTAL_SNRS = list(DEFAULT.total_snrs)
 PARTIAL_SNR_FACTORS = list(DEFAULT.partial_snr_factors)
@@ -69,6 +57,14 @@ def decay_time(eig):
     return -1 / np.log(np.abs(eig))
 
 
+def eigenvalue_yr(tau_yr):
+    return eigenvalue(12 * tau_yr)
+
+
+def decay_time_yr(eig):
+    return decay_time(eig) / 12
+
+
 @dataclass(frozen=True, eq=False)
 class System:
     W: np.ndarray
@@ -78,7 +74,6 @@ class System:
     rho: float
     theta: float
     lam_c: np.ndarray
-    forcing_amplitude: float = 1.0
     s1_sq: float = np.nan
     sp_sq: float = np.nan
     sc_sq: float = np.nan
@@ -127,8 +122,26 @@ class System:
 
     @property
     def spinup(self):
-        """Length of the forcing series before the record: the noise spin-up, extended to cover the history."""
         return max(self.noise_spinup, self.history)
+
+    @cached_property
+    def y0(self):
+        """The forcing at the first month of the NOISE spin-up, which B is normalized against.
+
+        Keying B to `spinup` instead would let the methods' history move the generated data
+        (test_history_override). The forcing is near-constant that far back, so the two agree in practice.
+        """
+        return centered_forcing(self, record_years(self)[0] - self.noise_spinup / 12)
+
+    @cached_property
+    def b_scale(self):
+        """||y0 (I - A)^-1 b||_F: the norm of the quasi-equilibrium state the system starts from."""
+        return abs(self.y0) * np.linalg.norm(np.linalg.solve(np.eye(M) - self.A, self.b))
+
+    @cached_property
+    def B(self):
+        """The unit pattern b scaled so ||y0 (I - A)^-1 B||_F = 1; derived, so every `replace` recomputes it."""
+        return self.b / self.b_scale
 
 
 def resolve_forcing_path(path):
@@ -214,15 +227,24 @@ def record_years(system):
     return system.record_end_year - N // 12 + 1 + np.arange(N) / 12
 
 
+def annual_years(system):
+    """Mid-year fractional years of the N // 12 annual means of the record."""
+    return record_years(system)[::12] + 0.5
+
+
+def check_forcing_source(source):
+    if source not in FORCING_SOURCES:
+        raise ValueError(f"unknown forcing_source {source!r}; valid: {', '.join(FORCING_SOURCES)}")
+
+
 def forcing_values(system, t_yr):
     """The system's forcing F (W m^-2) at fractional years, from its forcing_source."""
+    check_forcing_source(system.forcing_source)
     if system.forcing_source == "analytic":
         return co2_forcing_model(t_yr, system.forcing_efold_yr)
     if system.forcing_source == "analytic_gauss":
         return co2_forcing_gauss_model(t_yr, *gauss_params(system))
-    if system.forcing_source == "file":
-        return file_forcing(t_yr, system.forcing_file, system.forcing_column)
-    raise ValueError(f"unknown forcing_source {system.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
+    return file_forcing(t_yr, system.forcing_file, system.forcing_column)
 
 
 def centered_forcing(system, t_yr):
@@ -234,10 +256,14 @@ def centered_forcing(system, t_yr):
     return forcing_values(system, t_yr) - forcing_values(system, record_years(system)).mean()
 
 
+def spinup_years(system):
+    """Fractional years of the spin-up and record months -spinup..N-1."""
+    return record_years(system)[0] + np.arange(-system.spinup, N) / 12
+
+
 def forcing_series(system):
     """Forcing over spin-up + record, centered on the record (the same offset is kept during spin-up)."""
-    t_yr = record_years(system)[0] + np.arange(-system.spinup, N) / 12
-    return system.forcing_amplitude * centered_forcing(system, t_yr)
+    return centered_forcing(system, spinup_years(system))
 
 
 def run_modal(Lambda, drive, z0=None):
@@ -249,10 +275,14 @@ def run_modal(Lambda, drive, z0=None):
     return out
 
 
+def drive_modal(system, y, z0=None):
+    """Modal coordinates (len(y), M) of the system driven by the scalar forcing y; project with `@ system.W.T`."""
+    return run_modal(system.Lambda_R, np.outer(y, system.W_inv @ system.B), z0)
+
+
 def forced_response(system):
     y = forcing_series(system)
-    z = run_modal(system.Lambda_R, np.outer(y, system.W_inv @ system.b))
-    return y, z[system.spinup:] @ system.W.T
+    return y, drive_modal(system, y)[system.spinup:] @ system.W.T
 
 
 def internal_variability(system, n_realizations, seed):
@@ -359,10 +389,14 @@ def modal_coordinates(ds, x):
     return x @ ds.system.W_inv.T
 
 
+def global_mean(x):
+    """Mean over the last (latitude) axis of an (..., M) field; unweighted, to match the patterns."""
+    return x.mean(axis=-1)
+
+
 @dataclass(frozen=True, eq=False)
 class Reference:
-    unit_system: System  # forcing amplitude 1
-    system: System  # forcing amplitude calibrated so that V_f = cfg.forced_variance
+    system: System  # the system the sweeps build on; b is the raw unit pattern, B is b scaled (see System.B)
     budget: dict
     snr: float
     base_overlap: float
@@ -372,8 +406,7 @@ class Reference:
 
 @lru_cache(maxsize=None)
 def build_reference(cfg=DEFAULT):
-    if cfg.forcing_source not in FORCING_SOURCES:
-        raise ValueError(f"unknown forcing_source {cfg.forcing_source!r}; valid: {', '.join(FORCING_SOURCES)}")
+    check_forcing_source(cfg.forcing_source)
     if cfg.forcing_source == "analytic_gauss":
         bad = [f"{k}={getattr(cfg, k)!r}" for k in ("gauss_bump_amp", "gauss_dip_amp") if getattr(cfg, k) < 0]
         bad += [f"{k}={getattr(cfg, k)!r}" for k in ("gauss_efold_yr", "gauss_bump_width_yr", "gauss_dip_width_yr")
@@ -381,127 +414,137 @@ def build_reference(cfg=DEFAULT):
         if bad:
             raise ValueError(f"analytic_gauss needs amplitudes >= 0 and widths, efold > 0; got {', '.join(bad)}")
     W, W_inv, b, phi = make_W(M, cfg.pattern_seed)
-    unit = System(
+    system = System(
         W=W, W_inv=W_inv, b=b,
-        lam1=eigenvalue(12 * cfg.tau1_yr), rho=eigenvalue(12 * cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
+        lam1=eigenvalue_yr(cfg.tau1_yr), rho=eigenvalue_yr(cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
         lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
         history=cfg.history, record_end_year=cfg.record_end_year, forcing_efold_yr=cfg.forcing_efold_yr,
         forcing_source=cfg.forcing_source, forcing_file=cfg.forcing_file, forcing_column=cfg.forcing_column,
         **{f: getattr(cfg, f) for f in GAUSS_FIELDS},
     )
-    amplitude = np.sqrt(cfg.forced_variance / forced_variance(forced_response(unit)[1]))
-    budget = config_budget(cfg.forced_variance, cfg)
+    # No amplitude calibration: the scale is set by B (System.b_scale). The budget follows the reference's
+    # actual V_f, which is no longer a config target, so the reference SNR is cfg.variances' shares.
+    reference_V_f = forced_variance(forced_response(system)[1])
+    budget = config_budget(reference_V_f, cfg)
     base_overlap = pair_plane_overlap(W)
     overlaps = cfg.mode_overlaps if cfg.mode_overlaps is not None else (0.0, 0.25, base_overlap, 0.75, 0.9, 0.95)
-    return Reference(unit_system=unit, system=replace(unit, forcing_amplitude=amplitude), budget=budget,
-                     snr=theoretical_snr(cfg.forced_variance, **budget), base_overlap=base_overlap,
-                     mode_overlaps=tuple(overlaps), phi=phi)
+    return Reference(system=system, budget=budget, snr=theoretical_snr(reference_V_f, **budget),
+                     base_overlap=base_overlap, mode_overlaps=tuple(overlaps), phi=phi)
 
 
 _REF = build_reference(DEFAULT)
+# B_HAT is the RAW unit-norm forcing pattern, not the scaled B (see System.B).
 W_REF, W_INV_REF, B_HAT, PHI = _REF.system.W, _REF.system.W_inv, _REF.system.b, _REF.phi
-UNIT_FORCING_REFERENCE = _REF.unit_system
-FORCING_AMPLITUDE = _REF.system.forcing_amplitude
 REFERENCE = _REF.system
 REFERENCE_BUDGET = dict(_REF.budget)
-REFERENCE_SNR = _REF.snr
 BASE_OVERLAP = _REF.base_overlap
 MODE_OVERLAPS = list(_REF.mode_overlaps)
 
 
-def scaled_budget(V_f, factor):
-    return config_budget(V_f, scale=factor)
+# One row per study: how its levels are enumerated, how each level bends the reference system, and what
+# budget it gets. study_levels and the five sweep functions below are both views of this table, so the
+# study matrix is described exactly once.
+@dataclass(frozen=True)
+class Study:
+    param_name: str
+    levels: Callable  # (ref, cfg) -> the study's levels
+    system: Callable = lambda ref, level: ref.system
+    budget: Callable = lambda ref, cfg, level: partial(config_budget, cfg=cfg)
+    param_value: Callable = lambda level: level
 
 
-def component_budget(V_f, key, factor):
-    return config_budget(V_f, component=key, factor=factor)
+def _tilted(ref, overlap):
+    W, W_inv = tilt_slow(ref.system.W, overlap)
+    return replace(ref.system, W=W, W_inv=W_inv)
 
 
-def _dataset_kwargs(cfg, kwargs):
-    return {"n_realizations": cfg.n_realizations, "seed": cfg.noise_seed, **kwargs}
+STUDIES = {
+    "total_snr": Study(
+        param_name="SNR",
+        levels=lambda ref, cfg: list(cfg.total_snrs),
+        budget=lambda ref, cfg, snr: partial(config_budget, cfg=cfg, scale=ref.snr / snr),
+    ),
+    **{f"partial_snr_{component}": Study(
+        param_name=f"{component} variance factor",
+        levels=lambda ref, cfg: list(cfg.partial_snr_factors),
+        budget=lambda ref, cfg, factor, key=key: partial(config_budget, cfg=cfg, component=key, factor=factor),
+    ) for component, key in PARTIAL_SNR_COMPONENTS.items()},
+    **{f"slow_timescale_{hold}": Study(
+        param_name=r"$\tau_1$ (yr)",
+        levels=lambda ref, cfg: list(cfg.slow_timescales_yr),
+        system=lambda ref, tau: replace(ref.system, lam1=eigenvalue_yr(tau)),
+        # "snr" rescales the budget to each level's own V_f, holding SNR fixed; "modal_variance" pins the
+        # budget to the reference, so SNR follows V_f.
+        budget=(lambda ref, cfg, tau: partial(config_budget, cfg=cfg)) if hold == "snr"
+        else (lambda ref, cfg, tau: lambda V_f: dict(ref.budget)),
+    ) for hold in SLOW_TIMESCALE_HOLDS},
+    "spatial_overlap": Study(
+        param_name="mode overlap",
+        levels=lambda ref, cfg: list(ref.mode_overlaps),
+        system=_tilted,
+    ),
+    "joint_snr_timescale": Study(
+        param_name="SNR",
+        levels=lambda ref, cfg: [(snr, tau) for snr in cfg.total_snrs for tau in cfg.slow_timescales_yr],
+        system=lambda ref, level: replace(ref.system, lam1=eigenvalue_yr(level[1])),
+        budget=lambda ref, cfg, level: partial(config_budget, cfg=cfg, scale=ref.snr / level[0]),
+        param_value=lambda level: level[0],
+    ),
+}
+
+
+def sweep(study, levels=None, cfg=DEFAULT, **kwargs):
+    """Datasets for the given levels of `study` (all of them when levels is None)."""
+    if study not in STUDIES:
+        raise KeyError(f"unknown study {study!r}; valid studies: {', '.join(sorted(STUDIES))}")
+    spec = STUDIES[study]
+    ref = build_reference(cfg)
+    return [
+        make_dataset(spec.system(ref, level), spec.budget(ref, cfg, level), study=study,
+                     param_name=spec.param_name, param_value=spec.param_value(level),
+                     **{"n_realizations": cfg.n_realizations, "seed": cfg.noise_seed, **kwargs})
+        for level in (spec.levels(ref, cfg) if levels is None else levels)
+    ]
 
 
 def total_snr_sweep(snrs=None, cfg=DEFAULT, **kwargs):
-    ref = build_reference(cfg)
-    return [
-        make_dataset(ref.system, partial(config_budget, cfg=cfg, scale=ref.snr / snr),
-                     study="total_snr", param_name="SNR", param_value=snr, **_dataset_kwargs(cfg, kwargs))
-        for snr in (cfg.total_snrs if snrs is None else snrs)
-    ]
+    return sweep("total_snr", snrs, cfg, **kwargs)
 
 
 def partial_snr_sweep(component, factors=None, cfg=DEFAULT, **kwargs):
-    key = PARTIAL_SNR_COMPONENTS[component]
-    ref = build_reference(cfg)
-    return [
-        make_dataset(ref.system, partial(config_budget, cfg=cfg, component=key, factor=factor),
-                     study=f"partial_snr_{component}", param_name=f"{component} variance factor",
-                     param_value=factor, **_dataset_kwargs(cfg, kwargs))
-        for factor in (cfg.partial_snr_factors if factors is None else factors)
-    ]
+    return sweep(f"partial_snr_{component}", factors, cfg, **kwargs)
 
 
 def slow_timescale_sweep(taus_yr=None, hold="snr", cfg=DEFAULT, **kwargs):
-    if hold not in SLOW_TIMESCALE_HOLDS:
-        raise ValueError(f"hold must be one of {SLOW_TIMESCALE_HOLDS}")
-    ref = build_reference(cfg)
-    budget = partial(config_budget, cfg=cfg) if hold == "snr" else partial(_fixed_budget, ref.budget)
-    return [
-        make_dataset(replace(ref.system, lam1=eigenvalue(12 * tau)), budget,
-                     study=f"slow_timescale_{hold}", param_name=r"$\tau_1$ (yr)", param_value=tau,
-                     **_dataset_kwargs(cfg, kwargs))
-        for tau in (cfg.slow_timescales_yr if taus_yr is None else taus_yr)
-    ]
-
-
-def _fixed_budget(budget, V_f):
-    return dict(budget)
+    return sweep(f"slow_timescale_{hold}", taus_yr, cfg, **kwargs)
 
 
 def spatial_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
-    ref = build_reference(cfg)
-    datasets = []
-    for overlap in (ref.mode_overlaps if overlaps is None else overlaps):
-        W, W_inv = tilt_slow(ref.system.W, overlap)
-        datasets.append(make_dataset(replace(ref.system, W=W, W_inv=W_inv), partial(config_budget, cfg=cfg),
-                                     study="spatial_overlap", param_name="mode overlap",
-                                     param_value=overlap, **_dataset_kwargs(cfg, kwargs)))
-    return datasets
+    return sweep("spatial_overlap", overlaps, cfg, **kwargs)
 
 
 def joint_sweep(snrs=None, taus_yr=None, cfg=DEFAULT, **kwargs):
-    ref = build_reference(cfg)
-    return [
-        make_dataset(replace(ref.system, lam1=eigenvalue(12 * tau)),
-                     partial(config_budget, cfg=cfg, scale=ref.snr / snr),
-                     study="joint_snr_timescale", param_name="SNR", param_value=snr, **_dataset_kwargs(cfg, kwargs))
-        for snr in (cfg.total_snrs if snrs is None else snrs)
+    levels = None if snrs is None and taus_yr is None else [
+        (snr, tau) for snr in (cfg.total_snrs if snrs is None else snrs)
         for tau in (cfg.slow_timescales_yr if taus_yr is None else taus_yr)
     ]
+    return sweep("joint_snr_timescale", levels, cfg, **kwargs)
 
 
 def study_levels(cfg=DEFAULT):
     """(study, level, one-dataset factory) for every level of every study under cfg."""
     ref = build_reference(cfg)
-    levels = [("total_snr", v, partial(total_snr_sweep, snrs=[v], cfg=cfg)) for v in cfg.total_snrs]
-    levels += [(f"partial_snr_{c}", v, partial(partial_snr_sweep, c, factors=[v], cfg=cfg))
-               for c in PARTIAL_SNR_COMPONENTS for v in cfg.partial_snr_factors]
-    levels += [(f"slow_timescale_{h}", v, partial(slow_timescale_sweep, taus_yr=[v], hold=h, cfg=cfg))
-               for h in SLOW_TIMESCALE_HOLDS for v in cfg.slow_timescales_yr]
-    levels += [("spatial_overlap", v, partial(spatial_overlap_sweep, overlaps=[v], cfg=cfg)) for v in ref.mode_overlaps]
-    levels += [("joint_snr_timescale", (s, t), partial(joint_sweep, snrs=[s], taus_yr=[t], cfg=cfg))
-               for s in cfg.total_snrs for t in cfg.slow_timescales_yr]
-    return levels
+    return [(study, level, partial(sweep, study, [level], cfg))
+            for study, spec in STUDIES.items() for level in spec.levels(ref, cfg)]
 
 
 def find_level(cfg, study, value):
     """The dataset factory for one study level; value is matched to within 1e-9 relative (a tuple for joint)."""
     levels = study_levels(cfg)
-    studies = sorted({s for s, _, _ in levels})
-    if study not in studies:
-        raise KeyError(f"unknown study {study!r}; valid studies: {', '.join(studies)}")
-    candidates = [(v, make) for s, v, make in levels if s == study]
-    for v, make in candidates:
-        if np.shape(v) == np.shape(value) and np.allclose(v, value, rtol=1e-9, atol=1e-12):
-            return make
-    raise KeyError(f"no level {value!r} in {study}; valid levels: {[v for v, _ in candidates]}")
+    if study not in STUDIES:
+        raise KeyError(f"unknown study {study!r}; valid studies: {', '.join(sorted(STUDIES))}")
+    candidates = [(level, factory) for s, level, factory in levels if s == study]
+    for level, factory in candidates:
+        if np.shape(level) == np.shape(value) and np.allclose(level, value, rtol=1e-9, atol=1e-12):
+            return factory
+    raise KeyError(f"no level {value!r} in {study}; valid levels: {[level for level, _ in candidates]}")

@@ -9,7 +9,6 @@
   "slow_variance": 1.0,
   "pair_variance": 1.0,
   "complement_variance": 1.0,
-  "forced_variance": 20.0,
   "forcing_source": "analytic_gauss",
   "forcing_file": "data_preparation/AR6_ERF_1750-2019.csv",
   "forcing_column": "co2",

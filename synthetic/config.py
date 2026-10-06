@@ -1,21 +1,27 @@
 """Every tunable value of the synthetic ablations, in one frozen dataclass.
 
 Override from the command line with `--set key=value ...`, e.g.
-    python run_ablations.py --name slow50 --set tau1_yr=50 slow_variance=0.5
-    python plot_system.py --set tau_p_yr=5 period_p_yr=8
-    python run_ablations.py --name ar6 --set forcing_source=file                     # AR6 CO2 from the default file
-    python run_ablations.py --name exp --set forcing_source=analytic                 # plain exp ramp
-    python run_ablations.py --name dip1 --set gauss_dip_amp=1                        # a much deeper dip
-    python compare_forcings.py --set gauss_bump_amp=0.05 gauss_bump_year=1940         # reshape the Gaussian model
-    python run_ablations.py --name total --set forcing_source=file forcing_column=total forcing_file=/abs/forcing.csv
+    python run_ablation_studies.py --name slow50 --set tau1_yr=50 slow_variance=0.5
+    python plot_system_diagnostics.py --set tau_p_yr=5 period_p_yr=8
+    python run_ablation_studies.py --name ar6 --set forcing_source=file                     # AR6 CO2 from the default file
+    python run_ablation_studies.py --name exp --set forcing_source=analytic                 # plain exp ramp
+    python run_ablation_studies.py --name dip1 --set gauss_dip_amp=1                        # a much deeper dip
+    python plot_forcing_comparison.py --set gauss_bump_amp=0.05 gauss_bump_year=1940         # reshape the Gaussian model
+    python run_ablation_studies.py --name total --set forcing_source=file forcing_column=total forcing_file=/abs/forcing.csv
 
-Grid size M = 20 and record length N = 1200 months are structural and stay fixed in ablations.py.
+Grid size M = 20 and record length N = 1980 months (Jan 1850 - Dec 2014) are structural and stay
+fixed in ablation_data.py.
 """
 
 import ast
 import json
+import pathlib
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Optional, Tuple
+
+SYNTHETIC_DIR = pathlib.Path(__file__).resolve().parent
+RESULTS_DIR = SYNTHETIC_DIR / "results"
+LEGACY_KEYS = {"forced_variance"}  # dropped fields that older results/*/config.json still carry
 
 
 @dataclass(frozen=True)
@@ -31,7 +37,6 @@ class Config:
     slow_variance: float = 1.0  # s1^2 = slow_variance * V_f
     pair_variance: float = 1.0  # sp^2 = pair_variance * V_f / 2 per pair mode
     complement_variance: float = 1.0  # sc^2 = complement_variance * V_f / 17 per complement mode
-    forced_variance: float = 20.0  # V_f of the reference forced response (= M); sets the overall scale
 
     # --- forcing in time (CO2 zonal pattern in space) ----------------------------------------
     # Always centered on the observed interval (the record): generation, the methods' input and every plot.
@@ -43,7 +48,7 @@ class Config:
     forcing_source: str = "analytic_gauss"
     forcing_file: str = "data_preparation/AR6_ERF_1750-2019.csv"
     forcing_column: str = "co2"
-    record_end_year: int = 2014  # the 100-yr record ends in December of this year (1915-2014)
+    record_end_year: int = 2014  # the 165-yr record ends in December of this year (1850-2014)
     forcing_efold_yr: float = 60  # e-folding time of the exp ramp (fit: 59.8 yr)
     # analytic_gauss shape. Amplitudes are W m^-2 next to a = 1.96 (only their ratio to the exp matters, since the
     # overall scale is removed); amplitude 0 removes that Gaussian. Defaults: one dip, no bump. The joint fit to
@@ -78,10 +83,6 @@ class Config:
     def variances(self):
         return self.slow_variance, self.pair_variance, self.complement_variance
 
-    @property
-    def reference_snr(self):
-        return 1 / sum(self.variances)
-
 
 DEFAULT = Config()
 FIELDS = {f.name for f in fields(Config)}
@@ -114,7 +115,7 @@ def to_json(cfg, path):
 
 
 def from_json(path):
-    data = json.loads(path.read_text())
+    data = {k: v for k, v in json.loads(path.read_text()).items() if k not in LEGACY_KEYS}
     unknown = set(data) - FIELDS
     if unknown:
         raise KeyError(f"unknown config keys in {path}: {sorted(unknown)}")
@@ -127,6 +128,12 @@ def config_diff(cfg, base=DEFAULT):
                      for f in fields(Config) if getattr(cfg, f.name) != getattr(base, f.name))
 
 
-def slug(cfg, base=DEFAULT):
-    label = config_diff(cfg, base)
+def slug(cfg):
+    label = config_diff(cfg)
     return "default" if not label else "".join(c if c.isalnum() or c in "._=" else "_" for c in label.replace(", ", "__"))
+
+
+def load_config(args):
+    """The config an entry point runs with: results/<from_run>/config.json or DEFAULT, then --set overrides."""
+    cfg = from_json(RESULTS_DIR / args.from_run / "config.json") if args.from_run else DEFAULT
+    return with_overrides(cfg, args.set)

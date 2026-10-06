@@ -1,0 +1,5 @@
+{
+  "record_months": 1980,
+  "state_dim": 20,
+  "b_scaling": "||y0 (I - A)^-1 B||_F = 1"
+}

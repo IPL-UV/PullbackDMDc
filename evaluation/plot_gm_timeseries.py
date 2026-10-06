@@ -517,7 +517,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
             ax_rmsd.tick_params(axis='y', left=False, labelleft=False)
 
         
-        # ── Bottom panel: grouped bar chart ─────────────────────────────────
+        # ── Bottom panel: grouped box plot (per-member RMSD) ────────────────
         t_arr = np.array(time_index)
 
         mask_volc = np.array([is_in_volcanic(t) for t in t_arr])
@@ -536,39 +536,48 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
         ax_bar.grid(axis='y', alpha=0.3)
         ax_bar.set_axisbelow(True)
 
-        bar_width     = 0.8 / n_methods
+        box_width     = 0.8 / n_methods
         group_centers = np.arange(n_groups)
 
         for mi, method in enumerate(methods_plot_order):
             preds = np.array(timeseries[model][method]['preds'])
-            bar_vals = []
-            for mask in group_masks:
-                if mask.any():
-                    rmsd_val = np.sqrt(
-                        ((preds[:, mask] - truth_gm[None, mask]) ** 2).mean()
-                    ) / norm_const * 100.
-                else:
-                    rmsd_val = 0.0
-                bar_vals.append(rmsd_val)
+            box_data, box_pos = [], []
+            for gi, mask in enumerate(group_masks):
+                if not mask.any():
+                    continue
+                # One RMSD per ensemble member over this group's time steps.
+                member_rmsd = np.sqrt(
+                    ((preds[:, mask] - truth_gm[None, mask]) ** 2).mean(axis=1)
+                ) / norm_const * 100.
+                box_data.append(member_rmsd)
+                box_pos.append(group_centers[gi] + (mi - (n_methods - 1) / 2) * box_width)
 
-            offsets  = (mi - (n_methods - 1) / 2) * bar_width
-            x_pos    = group_centers + offsets
-            ax_bar.bar(
-                x_pos, bar_vals,
-                width=bar_width * 0.9,
-                color=colors[method],
-                alpha=alphas.get(method, 1.0),
-                edgecolor='black',
-                linewidth=0.4,
-                zorder=1,
+            bp = ax_bar.boxplot(
+                box_data,
+                positions=box_pos,
+                widths=box_width * 0.9,
+                whis=(0, 100),  # whiskers span min-max across members
+                patch_artist=True,
+                showfliers=False,
+                manage_ticks=False,
+                boxprops=dict(linewidth=0.4),
+                whiskerprops=dict(linewidth=0.6),
+                capprops=dict(linewidth=0.6),
+                medianprops=dict(color='black', linewidth=0.8),
             )
+            for patch in bp['boxes']:
+                patch.set_facecolor(colors[method])
+                patch.set_alpha(alphas.get(method, 1.0))
+                patch.set_zorder(1)
 
+        ax_bar.set_ylim(bottom=0)
         ax_bar.set_xticks(group_centers)
         ax_bar.set_xticklabels(group_labels, fontsize=tick_fontsize)
         ax_bar.tick_params(axis='x', labelsize=tick_fontsize)
         ax_bar.tick_params(axis='y', labelsize=tick_fontsize)
         if col == 0:
             ax_bar.set_ylabel('RMSD by period (%)', fontsize=10)
+        
 
         # Spacer row is intentionally blank.
         axes[row_base + 2, col].set_visible(False)
