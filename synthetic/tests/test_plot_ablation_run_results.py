@@ -9,8 +9,9 @@ from config import DEFAULT, with_overrides
 from plot_ablation_run_results import (DEFAULT_STUDIES, ROW_SPECS, Run, default_level, median_residual,
                                        plot_forcing_change, plot_phase, plot_phase_change,
                                        plot_slow_mode_shapes, plot_sweeps)
+from plot_system_diagnostics import plot_forced_response_ablations
 
-# the three default columns plus the ones the figures only show via --studies: spatial_overlap covers the
+# the four default columns plus the ones the figures only show via --studies: spatial_overlap covers the
 # LINEAR_X branch, and partial_snr_pair covers the pair_corr variant of row (c)
 PARAM_NAMES = {
     "total_snr": "SNR",
@@ -21,6 +22,7 @@ PARAM_NAMES = {
     "slow_timescale_snr": r"$\tau_1$ (yr)",
     "spatial_overlap": "mode overlap",
     "forcing_overlap": r"$\cos\angle(w_1,\hat b)$",
+    "noise_overlap": r"$|\cos\angle(q_k,w_1)|$",
 }
 MODE_METHODS = ("PullbackDMDc", "LIM", "truth")
 
@@ -148,6 +150,30 @@ def test_a_legacy_run_skips_the_metrics_it_never_scored():
         path = pathlib.Path(tmp) / "legacy.png"
         assert plot_sweeps([legacy], path) == list(DEFAULT_STUDIES)
         assert path.stat().st_size > 0
+
+
+def test_the_study_column_figures_are_laid_out_on_one_grid():
+    """results_sweeps, results_slow_mode_shapes and forced_response_ablations stack, so a column of one
+    sits over the same column of the others: same studies, same order, same width.
+
+    Each is saved with bbox="tight", which crops to its own contents, so the test is on the saved images:
+    the same study selection has to come out the same number of pixels wide in all three. The three differ
+    by a few pixels of tick-label margin -- hence the tolerance -- but a figure that stopped reserving
+    LEGEND_INCHES, or dropped to a different COLUMN_W, would be out by a sixth of its width.
+    """
+    # a cheap selection: spatial_overlap needs no dataset simulated at all, and total_snr's levels are
+    # the fast ones. No slow_timescale column, whose tau_1 = 100 yr level costs a 48 000-month spin-up.
+    studies = ("total_snr", "spatial_overlap")
+    cfg = with_overrides(DEFAULT, ["total_snrs=(0.1,1,10)"])
+    run = make_run("baseline", cfg)
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = {name: pathlib.Path(tmp) / f"{name}.png" for name in ("sweeps", "shapes", "ablations")}
+        plot_sweeps([run], paths["sweeps"], studies=studies)
+        plot_slow_mode_shapes(run, paths["shapes"], studies=studies)
+        plot_forced_response_ablations(paths["ablations"], cfg=cfg, studies=studies)
+        # the PNG's IHDR width, bytes 16:20, so the test needs no image library
+        widths = {name: int.from_bytes(path.read_bytes()[16:20], "big") for name, path in paths.items()}
+        assert max(widths.values()) - min(widths.values()) < 0.03 * min(widths.values()), widths
 
 
 def test_the_residual_is_the_departure_from_that_level_s_truth():

@@ -1,4 +1,5 @@
-"""Synthetic datasets for the ablation studies: total SNR, partial SNR, slow timescale and spatial overlap.
+"""Synthetic datasets for the ablation studies: total SNR, partial SNR, slow timescale, and the spatial,
+forcing and noise overlaps.
 
 Every tunable value lives in config.Config; the module-level constants below are the DEFAULT config's values.
 """
@@ -374,6 +375,52 @@ def rotate_slow_to_b(W, b, overlap):
     return W, np.linalg.inv(W)
 
 
+def balanced_signs(gamma):
+    """The +-1 vector eps minimizing |sum_k eps_k gamma_k|, by exhaustive search with eps_0 = +1.
+
+    gamma is the complement modes' share of the forcing, W_inv @ b over modes 4..M. Tilting the complement
+    toward w_1 with these signs (tilt_noise_to_slow) passes on to the slow mode a forcing share of
+    c / sqrt(1 - c^2) * sum_k eps_k gamma_k, so the search is what keeps gamma_1 -- and with it the forced
+    response -- where it was. The first sign is fixed because eps and -eps tie; ties among the rest go to
+    the first found, so the choice is deterministic. 2^(M-4) = 65 536 candidates at M = 20.
+    """
+    gamma = np.asarray(gamma, dtype=float)
+    rest = 1 - 2 * ((np.arange(2 ** (len(gamma) - 1))[:, None] >> np.arange(len(gamma) - 1)) & 1)
+    signs = np.column_stack([np.ones(len(rest)), rest])
+    return signs[np.argmin(np.abs(signs @ gamma))]
+
+
+def noise_overlap(W):
+    """|cos angle(q_k, w_1)| averaged over the complement columns q_k: all equal under tilt_noise_to_slow."""
+    u = W[:, 0] / np.linalg.norm(W[:, 0])
+    return float(np.mean(np.abs(u @ W[:, 3:]) / np.linalg.norm(W[:, 3:], axis=0)))
+
+
+def tilt_noise_to_slow(W, signs, overlap):
+    """Tilt every complement mode toward +-w_1 to |cos angle(q_k, w_1)| = overlap; no other mode moves.
+
+    q_k -> sqrt(1 - c^2) q_k + c eps_k u_1, with u_1 = w_1 / |w_1|. q_k is orthogonal to w_1 in the reference,
+    so this is a rotation of each q_k within its own plane span(q_k, w_1): q_k keeps unit norm and every
+    noisy mode meets the slow fingerprint at the same angle. Modal amplitudes are independent and the
+    columns stay unit norm, so the total internal variance sum_k |w_k|^2 s_k^2 does not change; what does
+    is where it lands: the noise along w_1 gains c^2 times the complement's whole budget.
+
+    The signs are balanced_signs of the complement's forcing shares, so the noisy modes pass on no net
+    forcing to the slow mode and the forced response is held fixed to within 1e-3. With every sign +1 the
+    slow mode's share of the forcing would grow sixfold across the sweep, which would make this a study of
+    the forcing rather than of the noise.
+
+    The q_k leave span(S)'s complement, so [pinv(S); Q_perp.T] is no longer the inverse, and W_inv is the
+    exact inverse instead, as in rotate_slow_to_b.
+    """
+    if not 0 <= overlap < 1:
+        raise ValueError(f"noise overlap must be a cosine in [0, 1); 1 makes W singular; got {overlap!r}")
+    u = W[:, 0] / np.linalg.norm(W[:, 0])
+    W = W.copy()
+    W[:, 3:] = np.sqrt((1 - overlap) * (1 + overlap)) * W[:, 3:] + overlap * np.outer(u, signs)
+    return W, np.linalg.inv(W)
+
+
 @dataclass(eq=False)
 class SyntheticDataset:
     study: str
@@ -437,6 +484,8 @@ class Reference:
     mode_overlaps: Tuple[float, ...]
     base_b_overlap: float
     b_overlaps: Tuple[float, ...]
+    noise_signs: Tuple[float, ...]  # balanced_signs of the reference's complement forcing shares
+    noise_overlaps: Tuple[float, ...]
     phi: np.ndarray
 
 
@@ -466,9 +515,12 @@ def build_reference(cfg=DEFAULT):
     overlaps = cfg.mode_overlaps if cfg.mode_overlaps is not None else (0.0, 0.25, base_overlap, 0.75, 0.9, 0.95)
     base_b_overlap = forcing_overlap(W, b)
     b_overlaps = cfg.b_overlaps if cfg.b_overlaps is not None else (0.0, 0.25, 0.5, base_b_overlap, 0.8, 0.9, 1.0)
+    # fixed at the reference, so every level of noise_overlap tilts with the same signs
+    noise_signs = balanced_signs((W_inv @ b)[3:])
     return Reference(system=system, budget=budget, snr=theoretical_snr(reference_V_f, **budget),
                      base_overlap=base_overlap, mode_overlaps=tuple(overlaps),
-                     base_b_overlap=base_b_overlap, b_overlaps=tuple(b_overlaps), phi=phi)
+                     base_b_overlap=base_b_overlap, b_overlaps=tuple(b_overlaps),
+                     noise_signs=tuple(noise_signs), noise_overlaps=tuple(cfg.noise_overlaps), phi=phi)
 
 
 _REF = build_reference(DEFAULT)
@@ -504,6 +556,11 @@ def _rotated_to_b(ref, overlap):
     return replace(ref.system, W=W, W_inv=W_inv)
 
 
+def _noise_tilted(ref, overlap):
+    W, W_inv = tilt_noise_to_slow(ref.system.W, np.asarray(ref.noise_signs), overlap)
+    return replace(ref.system, W=W, W_inv=W_inv)
+
+
 STUDIES = {
     "total_snr": Study(
         param_name="SNR",
@@ -534,6 +591,11 @@ STUDIES = {
         levels=lambda ref, cfg: list(ref.b_overlaps),
         system=_rotated_to_b,
     ),
+    "noise_overlap": Study(
+        param_name=r"$|\cos\angle(q_k,w_1)|$",
+        levels=lambda ref, cfg: list(ref.noise_overlaps),
+        system=_noise_tilted,
+    ),
     "joint_snr_timescale": Study(
         param_name="SNR",
         levels=lambda ref, cfg: [(snr, tau) for snr in cfg.total_snrs for tau in cfg.slow_timescales_yr],
@@ -542,6 +604,30 @@ STUDIES = {
         param_value=lambda level: level[0],
     ),
 }
+
+
+# every study the sweep and ablation figures can show, with the title its column carries
+SWEEP_STUDIES = {
+    "total_snr": "total SNR",
+    "partial_snr_slow": "partial SNR: slow",
+    "partial_snr_pair": "partial SNR: pair",
+    "partial_snr_complement": "partial SNR: complement",
+    "slow_timescale_snr": r"slow timescale ($\mathrm{SNR}$ fixed)",
+    # s_1^2 is the MODAL variance held fixed; the noise variance sigma_1^2 = s_1^2 (1 - lambda_1^2)
+    # is recomputed at every level and varies by two orders of magnitude over the sweep.
+    "slow_timescale_modal_variance": r"slow timescale ($s_1^2$ fixed)",
+    "spatial_overlap": "spatial overlap",
+    "forcing_overlap": "forcing overlap",
+    "noise_overlap": "noise overlap",
+}
+# the columns of the default figures, left to right; --studies overrides them. The first three are the axes the
+# score actually moves along: total SNR, tau_1, and the slow mode's own SNR; noise_overlap asks whether the
+# methods separate the slow mode from the noise by its timescale or by its pattern. The other geometry studies
+# (spatial_overlap, forcing_overlap) and the pair/complement partial SNRs are still run and still scored --
+# they are flat to within the median's sampling error for every method but LIM-opt, whose forced RMSE falls
+# across both geometry studies (see README.md), and --studies brings any of them back.
+DEFAULT_STUDIES = ("total_snr", "slow_timescale_modal_variance", "partial_snr_slow", "noise_overlap")
+LINEAR_X = {"spatial_overlap", "forcing_overlap", "noise_overlap"}  # cosines, so a log x-axis would be meaningless
 
 
 def sweep(study, levels=None, cfg=DEFAULT, **kwargs):
@@ -576,6 +662,10 @@ def spatial_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
 
 def forcing_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
     return sweep("forcing_overlap", overlaps, cfg, **kwargs)
+
+
+def noise_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
+    return sweep("noise_overlap", overlaps, cfg, **kwargs)
 
 
 def joint_sweep(snrs=None, taus_yr=None, cfg=DEFAULT, **kwargs):

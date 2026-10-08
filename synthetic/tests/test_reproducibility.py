@@ -14,7 +14,7 @@ from a parallel one in the last bits of each BLAS reduction. See README.md.
 
 import numpy as np
 
-from ablation_data import REFERENCE, equal_budget, make_dataset, sweep, total_snr_sweep
+from ablation_data import REFERENCE, build_reference, equal_budget, make_dataset, sweep, total_snr_sweep
 from config import DEFAULT, with_overrides
 from support import SMALL
 
@@ -70,6 +70,9 @@ def test_the_seeded_draws_are_pinned():
     # a scalar over the whole complement block: catches a reordering that leaves column 3 alone.
     # The Frobenius norm would not -- the block is orthonormal, so it is sqrt(17) for every seed.
     assert abs(float(REFERENCE.W[:, 3:].sum()) - (-3.9646728595672527)) < 1e-12
+    # noise_overlap's tilt signs follow from W and b-hat, so they are pinned with them: a change in the
+    # draws or in the search would otherwise move the study's forced response without failing anything
+    assert build_reference().noise_signs == (1, -1, -1, -1, 1, -1, -1, -1, -1, -1, -1, -1, 1, 1, 1, 1, -1)
 
 
 def test_a_dataset_is_reproducible_from_its_system():

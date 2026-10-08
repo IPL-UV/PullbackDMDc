@@ -22,6 +22,8 @@ from ablation_data import (
     REFERENCE_BUDGET,
     SLOW_TIMESCALES_YR,
     TOTAL_SNRS,
+    balanced_signs,
+    build_reference,
     decay_time,
     eigenvalue_yr,
     forcing_overlap,
@@ -29,13 +31,17 @@ from ablation_data import (
     forced_response,
     forced_variance,
     equal_budget,
+    internal_variance,
     make_dataset,
     modal_coordinates,
+    noise_overlap,
+    noise_overlap_sweep,
     pair_plane_overlap,
     partial_snr_sweep,
     slow_timescale_sweep,
     rotate_slow_to_b,
     spatial_overlap_sweep,
+    tilt_noise_to_slow,
     total_snr_sweep,
 )
 from support import SMALL, assert_unit_b_scale
@@ -51,6 +57,7 @@ INVARIANCE_LEVELS = (
     ("slow_timescale_snr", 100),
     ("spatial_overlap", 0.75),
     ("forcing_overlap", 0.9),
+    ("noise_overlap", 0.75),
     ("joint_snr_timescale", (1, 100)),
     ("slow_timescale_modal_variance", 100),
 )
@@ -61,7 +68,7 @@ def all_sweeps(**kwargs):
         total_snr_sweep(**kwargs)
         + [ds for c in PARTIAL_SNR_COMPONENTS for ds in partial_snr_sweep(c, **kwargs)]
         + slow_timescale_sweep(hold="snr", **kwargs) + slow_timescale_sweep(hold="modal_variance", **kwargs)
-        + spatial_overlap_sweep(**kwargs) + forcing_overlap_sweep(**kwargs)
+        + spatial_overlap_sweep(**kwargs) + forcing_overlap_sweep(**kwargs) + noise_overlap_sweep(**kwargs)
     )
 
 
@@ -221,6 +228,55 @@ def test_forcing_overlap_matches_the_closed_form():
         except ValueError:
             continue
         raise AssertionError(f"overlap {bad} outside [-1, 1] should raise, not return nan")
+
+
+def test_noise_overlap():
+    """The noisy modes tilt toward +-w_1 and nothing else moves: not w_1, not the forcing, not the noise total.
+
+    The forced response is held by the sign balancing to within 1e-3 (README.md), and the total internal
+    variance exactly, since every column stays unit norm; what grows is the noise on w_1, by c^2 times the
+    complement's whole budget.
+    """
+    reference = total_snr_sweep(snrs=[1 / 3], **SMALL)[0]
+    sweep = noise_overlap_sweep(**SMALL)
+    gamma1 = (W_INV_REF @ REFERENCE.b)[0]
+    for ds, overlap in zip(sweep, build_reference().noise_overlaps):
+        s = ds.system
+        W, w1 = s.W, s.W[:, 0]
+        assert abs(noise_overlap(W) - overlap) < 1e-12, overlap
+        assert np.allclose(np.abs(w1 @ W[:, 3:]), overlap, atol=1e-12), "every noisy mode at the same angle"
+        assert np.allclose(np.linalg.norm(W, axis=0), 1), "a rotation preserves the norm"
+        assert np.all(W[:, :3] == W_REF[:, :3]), "only the noisy modes move"
+        assert np.abs(s.W_inv @ W - np.eye(M)).max() < 1e-10
+        assert abs((s.W_inv @ s.b)[0] - gamma1) < 1e-4, "the slow mode's share of the forcing is held"
+        assert np.abs(ds.forced - reference.forced).max() < 1e-3 * np.abs(reference.forced).max(), overlap
+        assert abs(ds.snr - 1 / 3) < 1e-12
+        # unit columns and independent modal amplitudes: the total is the budget, whatever the tilt
+        total = internal_variance(s.s1_sq, s.sp_sq, s.sc_sq)
+        assert abs(np.sum(np.linalg.norm(W, axis=0) ** 2 * s.modal_variances) - total) < 1e-12 * total
+        # the noise on the slow fingerprint: the reference's, plus c^2 of the complement's whole budget
+        on_w1 = np.sum((w1 @ W) ** 2 * s.modal_variances)
+        pair = ((w1 @ W[:, 1]) ** 2 + (w1 @ W[:, 2]) ** 2) * s.sp_sq
+        expected = s.s1_sq + pair + overlap**2 * (M - 3) * s.sc_sq
+        assert abs(on_w1 - expected) < 1e-12 * expected, overlap
+    base = sweep[0].system
+    assert np.all(base.W == W_REF) and np.abs(base.W_inv - W_INV_REF).max() < 1e-10
+    for bad in (-0.1, 1.0, 1.5):
+        try:
+            tilt_noise_to_slow(W_REF, np.ones(M - 3), bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"noise overlap {bad} outside [0, 1) should raise")
+
+
+def test_balanced_signs_cancel_the_forcing_share():
+    """The exhaustive search finds the best cancellation, with the first sign fixed at +1."""
+    gamma = np.array([0.5, 0.3, 0.2, 0.15, 0.15])  # 0.5 - 0.3 - 0.2 + 0.15 - 0.15 cancels exactly
+    signs = balanced_signs(gamma)
+    assert signs[0] == 1 and set(np.abs(signs)) == {1}
+    assert abs(signs @ gamma) < 1e-12
+    reference_signs = np.asarray(build_reference().noise_signs)
+    assert abs(reference_signs @ (W_INV_REF @ REFERENCE.b)[3:]) < 1e-4
 
 
 def test_common_random_numbers():

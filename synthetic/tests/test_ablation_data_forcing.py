@@ -360,15 +360,15 @@ def test_study_levels():
     levels = study_levels()
     expected = (len(TOTAL_SNRS) + len(PARTIAL_SNR_COMPONENTS) * len(DEFAULT.partial_snr_factors)
                 + len(SLOW_TIMESCALE_HOLDS) * len(SLOW_TIMESCALES_YR) + len(build_reference().mode_overlaps)
-                + len(build_reference().b_overlaps)
+                + len(build_reference().b_overlaps) + len(build_reference().noise_overlaps)
                 + len(TOTAL_SNRS) * len(SLOW_TIMESCALES_YR))
     assert len(levels) == expected
     for study, _, make in levels[:: len(levels) // 8]:
         (ds,) = make(n_realizations=1)
         assert ds.study == study
-    #  total_snr + partial_snr x3 + slow_timescale x2 + spatial_overlap + forcing_overlap + joint
+    #  total_snr + partial_snr x3 + slow_timescale x2 + spatial_overlap + forcing_overlap + noise_overlap + joint
     assert len(study_levels(with_overrides(DEFAULT, ["total_snrs=[1]", "slow_timescales_yr=[5, 50]"]))) == (
-        1 + 15 + 4 + 6 + 7 + 2)
+        1 + 15 + 4 + 6 + 7 + 6 + 2)
 
 
 def test_find_level():

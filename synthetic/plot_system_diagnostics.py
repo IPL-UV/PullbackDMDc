@@ -4,10 +4,14 @@
     python plot_system_diagnostics.py --set tau1_yr=50 slow_variance=0.5      # tweaked reference system
     python plot_system_diagnostics.py --study slow_timescale_snr --level 100  # one sweep dataset
     python plot_system_diagnostics.py --from-run baseline --plots modal_overview
-    python plot_system_diagnostics.py --plots forced_response_ablations      # global means by tau1 and by SNR
+    python plot_system_diagnostics.py --plots forced_response_ablations      # one column per ablation study
+    python plot_system_diagnostics.py --plots forced_response_ablations --studies total_snr forcing_overlap
     python plot_system_diagnostics.py --plots forced_response_shape           # forced-response shape against the forcing
 
 Every forcing shown is centered on the record (see README.md).
+
+forced_response_ablations draws the columns of results_sweeps.png (plot_ablation_run_results.py), in the same
+order and at the same width, so the two figures stack.
 """
 
 import argparse
@@ -22,8 +26,14 @@ from matplotlib import cm
 from matplotlib.colors import LogNorm, Normalize
 
 from ablation_data import (
+    DEFAULT_STUDIES,
+    LINEAR_X,
     M,
+    PARTIAL_SNR_COMPONENTS,
     PHI,
+    SLOW_TIMESCALE_HOLDS,
+    STUDIES,
+    SWEEP_STUDIES,
     annual_years,
     build_reference,
     centered_forcing,
@@ -38,16 +48,20 @@ from ablation_data import (
     global_mean,
     make_dataset,
     record_years,
-    rotate_slow_to_b,
     spinup_years,
 )
 from config import DEFAULT, config_diff, load_config, slug
 from plot_ablation_diagnostics import annual, lat_label, standardized
 from plot_style import (
+    COLUMN_W,
+    LEGEND_INCHES,
     PAGE_W,
     PANEL_TITLE,
+    ROW_H,
     forcing_panel,
+    level_ticklabels,
     record_span,
+    reserve_legend_strip,
     residual_panel,
     save,
     zero_line,
@@ -221,97 +235,162 @@ def level_datasets(cfg, study, levels):
     return {level: find_level(one, study, level)()[0] for level in levels}
 
 
-def level_colors(levels, log=True):
+def level_colors(levels, study):
     """(color per level, scalar mappable for the colorbar).
 
-    Log by default: the tau_1 and SNR level sets span decades. The overlap levels are cosines that start at
-    0, which a log norm cannot take and would misrepresent anyway, so those pass log=False.
+    Log unless the study's levels are cosines (LINEAR_X): the tau_1 and SNR level sets span decades, and
+    a log norm cannot take the 0 the overlap sweeps start at and would misrepresent them anyway. It is
+    the rule that sets the sweep figure's x scale, so a study's levels read the same way in both figures.
     """
-    norm = (LogNorm if log else Normalize)(vmin=min(levels), vmax=max(levels))
+    norm = (Normalize if study in LINEAR_X else LogNorm)(vmin=min(levels), vmax=max(levels))
     mappable = cm.ScalarMappable(norm=norm, cmap=ABLATION_CMAP)
     return [mappable.to_rgba(level) for level in levels], mappable
 
 
 def level_colorbar(fig, ax, mappable, levels, label):
-    """A colorbar ticked at the sweep's own levels, not at decades.
+    """A colorbar under the column, ticked at the sweep's own levels, not at decades.
 
-    A log norm otherwise labels the bar 10^0, 4x10^0, ... which names values the sweep never ran; the
-    levels are the only meaningful ticks, and there are few enough of them to print.
+    Under rather than beside, as in plot_slow_mode_shapes: a vertical bar takes its width out of the
+    panel, which would leave the column narrower than the sweeps column it has to line up with. A log
+    norm otherwise labels the bar 10^0, 4x10^0, ... which names values the sweep never ran; the levels
+    are the only meaningful ticks, and there are few enough of them to print.
     """
-    bar = fig.colorbar(mappable, ax=ax, label=label, ticks=list(levels))
+    # aspect: the default 20 is a length cap, and under a single row 0.06 of the panel's height is thin
+    # enough that the cap leaves the bar well short of its column
+    bar = fig.colorbar(mappable, ax=ax, ticks=list(levels), location="bottom", fraction=0.06, pad=0.02,
+                       aspect=40)
     bar.ax.minorticks_off()
-    bar.ax.set_yticklabels([f"{level:.3g}" for level in levels])  # 1/30 is 0.0333, not 0.0333333
+    # 1/30 is 0.0333, not 0.0333333; a level crowded by its neighbour keeps its tick but not its label
+    bar.ax.set_xticklabels(level_ticklabels(levels, mappable.norm), fontsize=PANEL_TITLE)
+    bar.set_label(label, fontsize=PANEL_TITLE)  # the name the matching sweeps column carries as its x label
     return bar
 
 
-def plot_forced_response_ablations(out_path, label="", cfg=DEFAULT, **_):
-    """One panel per ablation: the forced response by tau_1, one realization by SNR, w_1's shape by its
-    overlap with the forcing.
+def realization_panel(ax, cfg, study, levels, line_colors):
+    """One noise realization per level, global mean, with the forced response in black.
 
-    Replaces the 20-panel latitude figure, which spent a page showing what is one curve per level once
-    the pattern is collapsed to a global mean. No two panels show the same quantity, and they cannot:
-    the total_snr sweep leaves the system alone and only rescales the noise budget, so its forced
-    response is identical at every level. What SNR changes is how far that fixed signal sits inside one
-    realization, which is what panel (b) draws.
-
-    Panel (c) is spatial where the first two are time series, because what forcing_overlap ablates is a
-    shape: w_1 rotates along the sphere toward b-hat until the two are the same vector, which is the
-    point at which the forcing drives the slow mode and nothing else. It needs only W, so it rotates the
-    reference system itself rather than simulating a dataset per level as (a) and (b) do -- the same
-    rotate_slow_to_b call the study's own builder makes, so these are its systems.
+    These studies leave the system alone and only move the noise budget, so the forced response is the
+    same curve at every level -- the panel asserts it -- and what the sweep changes is how far that fixed
+    signal sits inside one realization, which is what this draws.
     """
-    taus = list(cfg.slow_timescales_yr)
-    snrs = list(cfg.total_snrs)
+    datasets = level_datasets(cfg, study, levels)
+    forced = [ds.forced for ds in datasets.values()]
+    assert all(np.allclose(f, forced[0]) for f in forced), f"{study} changed the forced response"
+    for ds, color in zip(datasets.values(), line_colors):
+        ax.plot(annual_years(ds.system), annual(global_mean(ds.data[0]), axis=-1),
+                color=color, linewidth=0.9, alpha=0.85)
+    fixed = next(iter(datasets.values()))
+    ax.plot(annual_years(fixed.system), annual(global_mean(fixed.forced), axis=-1),
+            color="k", linewidth=2.2, zorder=5)
+    ax.set_xlabel("year")
+    return "data (global mean)\nblack: the forced response"
+
+
+def forced_panel(ax, cfg, study, levels, line_colors):
+    """The forced response per level, global mean: these studies move lambda_1, so it moves with them."""
+    for ds, color in zip(level_datasets(cfg, study, levels).values(), line_colors):
+        ax.plot(annual_years(ds.system), annual(global_mean(ds.forced), axis=-1),
+                color=color, linewidth=1.6)
+    ax.set_xlabel("year")
+    return "forced response (global mean)"
+
+
+def pattern_panel(ax, cfg, study, levels, line_colors):
+    """The slow mode w_1 against latitude per level: what these studies ablate is a shape.
+
+    Each level's system comes from the study table itself (STUDIES[study].system), the same call the
+    sweep's own builder makes, so these are its systems -- and none of them needs a dataset simulated.
+    """
     reference = build_reference(cfg)
-    overlaps = list(reference.b_overlaps)  # resolved here, not in cfg, where the field defaults to None
-    tau_data = level_datasets(cfg, "slow_timescale_snr", taus)
-    snr_data = level_datasets(cfg, "total_snr", snrs)
-    tau_colors, tau_mappable = level_colors(taus)
-    snr_colors, snr_mappable = level_colors(snrs)
-    overlap_colors, overlap_mappable = level_colors(overlaps, log=False)
+    if study == "forcing_overlap":
+        # b-hat first and heavy, so the c = 1 level is seen landing on it rather than hiding it
+        ax.plot(LAT, reference.system.b, color="k", linewidth=2.4, zorder=1)
+    for level, color in zip(levels, line_colors):
+        ax.plot(LAT, STUDIES[study].system(reference, level).W[:, 0], color=color, linewidth=1.6)
+    ax.set_xlabel("latitude (deg)")
+    return r"slow mode $w_1$" + (r", black: $\hat b$" if study == "forcing_overlap" else "")
 
-    fig, axes = plt.subplots(1, 3, figsize=(PAGE_W, 4.2))
 
-    for (tau, ds), color in zip(tau_data.items(), tau_colors):
-        axes[0].plot(annual_years(ds.system), annual(global_mean(ds.forced), axis=-1),
-                     color=color, linewidth=1.6)
-    zero_line(axes[0])
-    axes[0].set_title(r"(a) forced response, global mean, by $\tau_1$")
-    axes[0].set_ylabel("forced response (global mean)")
-    level_colorbar(fig, axes[0], tau_mappable, taus, r"$\tau_1$ (yr)")
+def noise_pattern_panel(ax, cfg, study, levels, line_colors):
+    """One noisy (complement) mode against latitude per level, with the slow mode w_1 in black.
 
-    forced = [ds.forced for ds in snr_data.values()]
-    # the premise of the panel: total_snr rescales the budget only, so one black curve serves every level
-    assert all(np.allclose(f, forced[0]) for f in forced), "total_snr changed the forced response"
-    for (snr, ds), color in zip(snr_data.items(), snr_colors):
-        axes[1].plot(annual_years(ds.system), annual(global_mean(ds.data[0]), axis=-1),
-                     color=color, linewidth=0.9, alpha=0.85)
-    fixed = next(iter(snr_data.values()))
-    axes[1].plot(annual_years(fixed.system), annual(global_mean(fixed.forced), axis=-1),
-                 color="k", linewidth=2.2, zorder=5, label="forced response (same at every SNR)")
-    zero_line(axes[1])
-    axes[1].set_title("(b) one realization, global mean, by SNR")
-    axes[1].set_ylabel("data (global mean)")
-    axes[1].legend(loc="upper left", fontsize=PANEL_TITLE)
-    level_colorbar(fig, axes[1], snr_mappable, snrs, "SNR")
+    noise_overlap moves the noisy modes and leaves w_1 -- and, by its choice of signs, the forced
+    response -- where they were, so the shape it ablates is theirs. All 17 tilt by the same angle; the one
+    drawn is the first, whose sign balanced_signs fixes at +1, so its curves close on +w_1 rather than on
+    -w_1. Its starting shape is a Haar-random draw and means nothing on its own: what the panel shows is
+    how far toward the slow fingerprint the noise is tipped.
+    """
+    reference = build_reference(cfg)
+    # w_1 first and heavy, as b-hat is in pattern_panel, so the c -> 1 levels are seen closing on it
+    ax.plot(LAT, reference.system.W[:, 0], color="k", linewidth=2.4, zorder=1)
+    for level, color in zip(levels, line_colors):
+        ax.plot(LAT, STUDIES[study].system(reference, level).W[:, 3], color=color, linewidth=1.6)
+    ax.set_xlabel("latitude (deg)")
+    return r"a noisy mode $q_4$, black: $w_1$"
 
-    # b-hat first and heavy, so the c = 1 level is seen landing on it rather than hiding it
-    axes[2].plot(LAT, reference.system.b, color="k", linewidth=2.4, zorder=1, label=r"$\hat b$")
-    for overlap, color in zip(overlaps, overlap_colors):
-        W, _ = rotate_slow_to_b(reference.system.W, reference.system.b, overlap)
-        axes[2].plot(LAT, W[:, 0], color=color, linewidth=1.6)
-    zero_line(axes[2])
-    axes[2].set_title(r"(c) slow mode $w_1$, by $\cos\angle(w_1,\hat b)$")
-    axes[2].set_ylabel(r"$w_1$")
-    axes[2].legend(loc="lower right", fontsize=PANEL_TITLE)
-    level_colorbar(fig, axes[2], overlap_mappable, overlaps, r"$\cos\angle(w_1,\hat b)$")
 
-    for ax in axes[:2]:
-        ax.set_xlabel("year")
-    axes[2].set_xlabel("latitude (deg)")
-    fig.suptitle(r"The ablations: forced response by $\tau_1$, one realization by SNR, the slow mode's "
-                 r"shape by $\cos\angle(w_1,\hat b)$" + (f"\n{label}" if label else ""))
-    save(fig, out_path)
+# One panel per study, keyed the way SWEEP_STUDIES is, so any column the sweep figure can draw this one
+# can draw too. Four kinds cover the nine, and no two kinds show the same quantity: each panel's own
+# docstring says why its studies get it.
+ABLATION_PANELS = {
+    "total_snr": realization_panel,
+    **{f"partial_snr_{component}": realization_panel for component in PARTIAL_SNR_COMPONENTS},
+    **{f"slow_timescale_{hold}": forced_panel for hold in SLOW_TIMESCALE_HOLDS},
+    "spatial_overlap": pattern_panel,
+    "forcing_overlap": pattern_panel,
+    "noise_overlap": noise_pattern_panel,
+}
+# the fraction of the y range left clear above the curves for the annotation, as in plot_sweeps
+ANNOTATION_HEADROOM = 0.22
+ABLATION_FOOTNOTE = (
+    "one realization per level, annual means, coloured by the level; the colorbar carries the levels the "
+    "matching column of results_sweeps.png sweeps. A study that only rescales the noise budget leaves the "
+    "forced response identical at every level (black, asserted), so its column draws the data instead; the "
+    r"slow-timescale columns draw the forced response, which moves with $\tau_1$; the overlap columns are "
+    r"spatial rather than time series, because what they ablate is a shape -- $w_1$ rotates toward $\hat b$ "
+    "until the forcing drives the slow mode and nothing else, and the noisy modes tilt toward $w_1$ until "
+    "only their timescale tells them apart from it."
+)
+
+
+def plot_forced_response_ablations(out_path, label="", cfg=DEFAULT, studies=None, **_):
+    """What each ablation does to the data, one column per study; returns the studies drawn, left to right.
+
+    The same studies in the same order as the sweep figure (DEFAULT_STUDIES, or the given selection) and
+    the same column grid plot_sweeps and plot_slow_mode_shapes are on (COLUMN_W, ROW_H, LEGEND_INCHES in
+    plot_style), so the three figures stack and read column by column: what the ablation changes in the
+    data here, what it costs each method there.
+
+    Each column gets the panel its study needs (ABLATION_PANELS), under the heading its sweeps column
+    carries. The levels go on a colorbar beneath the panel, because the x axis is spent on the quantity
+    itself, and what that quantity is goes inside the panel rather than on a y label: the ylabel is the
+    sweeps figure's row label, and a column that carries one is narrower than the columns that do not.
+    """
+    studies = list(studies or DEFAULT_STUDIES)
+    fig, axes = plt.subplots(1, len(studies), squeeze=False,
+                             figsize=(COLUMN_W * len(studies) + LEGEND_INCHES, ROW_H), layout="constrained")
+    reserve_legend_strip(fig)  # no legend of its own, but the strip keeps the columns on the sweeps' pitch
+    reference = build_reference(cfg)
+    for ax, study in zip(axes[0], studies):
+        levels = list(STUDIES[study].levels(reference, cfg))
+        line_colors, mappable = level_colors(levels, study)
+        detail = ABLATION_PANELS[study](ax, cfg, study, levels, line_colors)
+        zero_line(ax)
+        ax.grid(alpha=0.3, linewidth=0.5)
+        lo, hi = ax.get_ylim()
+        ax.set_ylim(lo, hi + ANNOTATION_HEADROOM * (hi - lo))
+        ax.text(0.03, 0.96, detail, transform=ax.transAxes, ha="left", va="top", fontsize=7, color="0.35")
+        ax.set_title(SWEEP_STUDIES[study])
+        level_colorbar(fig, ax, mappable, levels, STUDIES[study].param_name)
+    axes[0, 0].set_ylabel("what the ablation changes")
+    # title above and note below the axes rather than inside them, as in plot_slow_mode_shapes: bbox="tight"
+    # grows the canvas to include both, where a suptitle inside it would sit on the column headings
+    # one line, however long the label: the suptitle sits above the canvas at a fixed y, and a second line
+    # grows downward from it onto the column headings
+    fig.suptitle("The ablations: what each one does to the data" + (f" ({label})" if label else ""), y=1.04)
+    fig.text(0.5, -0.06, ABLATION_FOOTNOTE, ha="center", va="top", fontsize=7.5, color="0.35", wrap=True)
+    save(fig, out_path, tight=False, bbox="tight")
+    return studies
 
 
 def plot_forced_response_shape(ds, out_path, label="", **_):
@@ -349,10 +428,10 @@ def reference_dataset(cfg):
                         n_realizations=cfg.n_realizations, seed=cfg.noise_seed)
 
 
-def plot_diagnostics(ds, out_dir, plots=tuple(DIAGNOSTICS), n_shown=None, label="", cfg=DEFAULT):
+def plot_diagnostics(ds, out_dir, plots=tuple(DIAGNOSTICS), n_shown=None, label="", cfg=DEFAULT, studies=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in plots:
-        DIAGNOSTICS[name](ds, out_dir / f"{name}.png", n_shown=n_shown, label=label, cfg=cfg)
+        DIAGNOSTICS[name](ds, out_dir / f"{name}.png", n_shown=n_shown, label=label, cfg=cfg, studies=studies)
 
 
 def main():
@@ -362,6 +441,9 @@ def main():
     parser.add_argument("--study", help="plot one sweep dataset of this study instead of the reference")
     parser.add_argument("--level", help="the level within --study (a tuple 'snr,tau' for joint_snr_timescale)")
     parser.add_argument("--plots", nargs="*", choices=list(DIAGNOSTICS), default=list(DIAGNOSTICS))
+    parser.add_argument("--studies", nargs="+", choices=list(SWEEP_STUDIES), metavar="STUDY",
+                        help="forced_response_ablations columns, left to right, as in plot_ablation_run_results "
+                             f"(default: {' '.join(DEFAULT_STUDIES)})")
     parser.add_argument("--n-shown", type=int, help=f"realizations drawn (default: {MODAL_OVERVIEW_SHOWN} in "
                                                      "modal_overview, all in ensemble_super_spaghetti)")
     parser.add_argument("--name", help="output folder under figures/diagnostics/system/")
@@ -380,7 +462,7 @@ def main():
     name = args.name or args.from_run or slug(cfg)
     if args.study and not args.name:
         name += f"__{args.study}={args.level}".replace(",", "_").replace(" ", "")
-    plot_diagnostics(ds, FIGURES_DIR / name, args.plots, args.n_shown, label, cfg)
+    plot_diagnostics(ds, FIGURES_DIR / name, args.plots, args.n_shown, label, cfg, args.studies)
 
 
 if __name__ == "__main__":

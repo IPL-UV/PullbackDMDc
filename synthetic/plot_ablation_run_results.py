@@ -26,10 +26,12 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from ablation_data import PHI, build_reference, global_mean, record_years
+from ablation_data import (DEFAULT_STUDIES, LINEAR_X, PHI, SWEEP_STUDIES, build_reference, global_mean,
+                           record_years)
 from config import RESULTS_DIR, Config, config_diff, from_json
 from plot_ablation_diagnostics import standardized
-from plot_style import PAGE_W, PANEL_TITLE, save, zero_line
+from plot_style import (COLUMN_W, LEGEND_INCHES, PAGE_W, PANEL_TITLE, ROW_H, legend_rect, level_ticklabels,
+                        reserve_legend_strip, save, zero_line)
 from plot_system_diagnostics import reference_dataset
 from utils.params import colors, method_markers
 
@@ -38,27 +40,7 @@ FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "ablations"
 METHOD_ORDER = ["PullbackDMDc", "LIM", "LIM-opt", "LR"]
 # LIM and LIM-opt fit the same lag-step operator, so their structural scores coincide
 OPERATOR_METHODS = {"PullbackDMDc": "PullbackDMDc", "LIM": "LIM / LIM-opt"}
-# every study the figure can show, with the title its column carries
-SWEEP_STUDIES = {
-    "total_snr": "total SNR",
-    "partial_snr_slow": "partial SNR: slow",
-    "partial_snr_pair": "partial SNR: pair",
-    "partial_snr_complement": "partial SNR: complement",
-    "slow_timescale_snr": r"slow timescale ($\mathrm{SNR}$ fixed)",
-    # s_1^2 is the MODAL variance held fixed; the noise variance sigma_1^2 = s_1^2 (1 - lambda_1^2)
-    # is recomputed at every level and varies by two orders of magnitude over the sweep.
-    "slow_timescale_modal_variance": r"slow timescale ($s_1^2$ fixed)",
-    "spatial_overlap": "spatial overlap",
-    "forcing_overlap": "forcing overlap",
-}
-# the columns of the default figure, left to right; --studies overrides it. These are the three axes the
-# score actually moves along: total SNR, tau_1, and the slow mode's own SNR. The geometry studies
-# (spatial_overlap, forcing_overlap) and the pair/complement partial SNRs are still run and still scored --
-# they are flat to within the median's sampling error for every method but LIM-opt, whose forced RMSE falls
-# across both geometry studies (see README.md), and --studies brings any of them back.
-DEFAULT_STUDIES = ("total_snr", "slow_timescale_modal_variance", "partial_snr_slow")
 PAIR_STUDIES = {"partial_snr_pair"}  # studies scored on the oscillating pair rather than the slow mode
-LINEAR_X = {"spatial_overlap", "forcing_overlap"}  # cosines, so a log x-axis would be meaningless
 TRUTH_STYLE = dict(color="k", linestyle="--", linewidth=1.2)
 REFERENCE_STYLE = dict(linestyle=":", linewidth=1.1, alpha=0.9)
 VARIANT_LINESTYLES = ["-", "--", "-."]
@@ -238,13 +220,18 @@ def footnote_height(fig, text=FOOTNOTE, fontsize=FOOTNOTE_FONTSIZE):
 
 
 def row_legend(row_axes, **kwargs):
-    """One legend for a whole row, pooled from its panels so no label is missed or repeated."""
+    """One legend for a whole row, pooled from its panels so no label is missed or repeated.
+
+    Kept out of the layout: it hangs off the last panel, so tight_layout would otherwise narrow every
+    column to make room for it inside the rect -- on top of the LEGEND_INCHES already reserved for it,
+    which is what the strip is for.
+    """
     entries = {}
     for ax in row_axes:
         handles, labels = ax.get_legend_handles_labels()
         entries.update(dict(zip(labels, handles)))
     if entries:
-        row_axes[-1].legend(entries.values(), entries.keys(), **kwargs)
+        row_axes[-1].legend(entries.values(), entries.keys(), **kwargs).set_in_layout(False)
 
 
 def draw_panel(ax, spec, run, df, study, linestyle=None):
@@ -284,6 +271,8 @@ def default_level(study, cfg):
         return build_reference(cfg).base_overlap
     if study == "forcing_overlap":
         return build_reference(cfg).base_b_overlap
+    if study == "noise_overlap":
+        return 0.0                           # the reference's noisy modes are orthogonal to w_1 (make_W)
     return None
 
 
@@ -298,7 +287,8 @@ def plot_sweeps(runs, path, studies=None):
     if not studies:
         return []
     n_rows, n_cols = len(ROW_SPECS), len(studies)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.1 * n_cols, 2.5 * n_rows), squeeze=False)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(COLUMN_W * n_cols + LEGEND_INCHES, ROW_H * n_rows),
+                             squeeze=False)
     for j, study in enumerate(studies):
         frames = {run.name: run.results[run.results.study == study] for run in runs}
         for i, spec in enumerate(ROW_SPECS):
@@ -349,7 +339,7 @@ def plot_sweeps(runs, path, studies=None):
     footnote = FOOTNOTE + (PAIR_CLAUSE if any(s in PAIR_STUDIES for s in studies) else "") + "."
     fig.text(0.5, 0.004, footnote, ha="center", fontsize=FOOTNOTE_FONTSIZE, wrap=True)
     header = HEADER_INCHES / fig.get_figheight()
-    fig.tight_layout(rect=(0, footnote_height(fig, footnote), 1, 1 - header), h_pad=1.6)
+    fig.tight_layout(rect=(0, footnote_height(fig, footnote), legend_rect(fig), 1 - header), h_pad=1.6)
     save(fig, path, tight=False, bbox="tight")
     return studies
 
@@ -530,12 +520,14 @@ def plot_slow_mode_shapes(run, path, studies=None):
     if not studies or not methods:
         return []
     lat = np.rad2deg(PHI)
-    # 3.1 in per column and 2.5 in per row, the same as plot_sweeps, so the columns of the two figures
-    # line up when they are read together; the colorbars go under their column rather than beside it,
-    # which would take the width back out of the panel and break that alignment
+    # COLUMN_W per column and ROW_H per row, the same grid plot_sweeps is on, so the columns of the two
+    # figures line up when they are read together; the colorbars go under their column rather than beside
+    # it, which would take the width back out of the panel and break that alignment, and the legend strip
+    # is reserved here too although this figure has no legend, so that its columns keep the same pitch
     fig, axes = plt.subplots(len(methods), len(studies), squeeze=False,
-                             figsize=(3.1 * len(studies), 2.5 * len(methods)), sharex=True,
-                             layout="constrained")
+                             figsize=(COLUMN_W * len(studies) + LEGEND_INCHES, ROW_H * len(methods)),
+                             sharex=True, layout="constrained")
+    reserve_legend_strip(fig)
     for j, study in enumerate(studies):
         frame = run.modes[run.modes.study == study]
         levels = sorted(set(frame.param_value))
@@ -563,7 +555,7 @@ def plot_slow_mode_shapes(run, path, studies=None):
         bar = fig.colorbar(mappable, ax=axes[:, j].tolist(), ticks=levels, location="bottom",
                            fraction=0.06, pad=0.02)
         bar.ax.minorticks_off()
-        bar.ax.set_xticklabels([f"{level:.3g}" for level in levels], fontsize=PANEL_TITLE)
+        bar.ax.set_xticklabels(level_ticklabels(levels, norm), fontsize=PANEL_TITLE)
         bar.set_label(frame.param_name.iloc[0], fontsize=PANEL_TITLE)
     for i, method in enumerate(methods):
         axes[i, 0].set_ylabel(OPERATOR_METHODS[method])

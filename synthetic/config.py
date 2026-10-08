@@ -73,6 +73,9 @@ class Config:
     mode_overlaps: Optional[Tuple[float, ...]] = None  # None: (0, 0.25, base overlap, 0.75, 0.9, 0.95)
     # cos angle(w_1, b-hat): 0 is a slow mode orthogonal to the forcing pattern, 1 is w_1 = b-hat
     b_overlaps: Optional[Tuple[float, ...]] = None  # None: (0, 0.25, 0.5, base overlap, 0.8, 0.9, 1.0)
+    # |cos angle(q_k, w_1)| of every complement mode: 0 is the reference (q_k orthogonal to w_1); 1 is excluded,
+    # where every noisy mode would have the slow mode's shape and W would be singular
+    noise_overlaps: Tuple[float, ...] = (0, 0.25, 0.5, 0.75, 0.9, 0.95)
     n_realizations: int = 100
 
     # --- methods ----------------------------------------------------------------------------
