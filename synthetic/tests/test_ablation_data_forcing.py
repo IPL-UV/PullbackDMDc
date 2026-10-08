@@ -44,6 +44,7 @@ from ablation_data import (
     modal_coordinates,
     partial_snr_sweep,
     record_years,
+    spinup_years,
     slow_timescale_sweep,
     study_levels,
     total_snr_sweep,
@@ -94,18 +95,6 @@ def test_variance_overrides():
     for ds, snr in zip(total_snr_sweep(cfg=cfg, **SMALL), cfg.total_snrs):
         assert abs(ds.snr / snr - 1) < 1e-12
         assert abs(ds.system.s1_sq / ds.system.sp_sq - 4) < 1e-12  # 2 V_f against V_f / 2: proportions kept
-
-
-def test_history_override():
-    cfg = with_overrides(DEFAULT, ["history=2400", "tau1_yr=1"])
-    (ds,) = total_snr_sweep(snrs=[1], cfg=cfg, **SMALL)
-    assert ds.system.history == 2400 and ds.system.spinup >= 2400
-    long_forcings, short_forcings, history = ds.forcings()
-    assert history == 2400 and long_forcings.shape == (2400 + N, 1) and short_forcings.shape == (N, 1)
-    # the history is a method setting: the realizations and the forced response must not move
-    (base,) = total_snr_sweep(snrs=[1], cfg=with_overrides(DEFAULT, ["tau1_yr=1"]), **SMALL)
-    assert np.all(ds.internal == base.internal) and np.abs(ds.forced - base.forced).max() < 1e-12
-    assert np.all(ds.y[-N:] == base.y[-N:])
 
 
 def test_forcing_fit():
@@ -339,11 +328,10 @@ def test_forcing_centered_everywhere():
             s = ds.system
             record = ds.y[s.spinup:]
             assert abs(record.mean()) < 1e-12 * np.ptp(record), (cfg.forcing_source, study, value)
-            long_forcings, short_forcings, history = ds.forcings()
-            assert np.array_equal(short_forcings[:, 0], record)
-            assert np.array_equal(long_forcings[:, 0], ds.y[s.spinup - history:])
-            t = record_years(s)[0] + np.arange(-s.spinup, N) / 12
-            assert np.allclose(ds.y, centered_forcing(s, t), rtol=0, atol=1e-14)
+            long_forcings, short_forcings, transition_time = ds.forcings()
+            assert transition_time == s.spinup and np.array_equal(short_forcings[:, 0], record)
+            assert np.array_equal(long_forcings[:, 0], ds.y)
+            assert np.allclose(ds.y, centered_forcing(s, spinup_years(s)), rtol=0, atol=1e-14)
         s = build_reference(cfg).system
         record = record_years(s)
         for values, _ in forcing_curves(s, record).values():

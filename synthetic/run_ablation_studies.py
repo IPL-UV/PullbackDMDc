@@ -197,11 +197,11 @@ def run_level(study, make, cfg=DEFAULT):
     w1 = ds.system.W[:, 0]
     rows = []
     modes = [dict(mode_meta, realization=-1, method="truth", pattern=w1 / np.linalg.norm(w1))]
-    long_forcings, short_forcings, history = ds.forcings()
+    long_forcings, short_forcings, spinup = ds.forcings()
     methods = make_methods(cfg)
     for r, data in enumerate(ds.data):
         for name, fit in methods.items():
-            forced_est, A = fit(data, long_forcings, short_forcings, history)
+            forced_est, A = fit(data, long_forcings, short_forcings, spinup)
             rows.append(dict(meta, realization=r, method=name, **score(ds, forced_est, A, lag=cfg.lag)))
             pattern = fitted_slow_mode(A, ds.system.lam1 ** cfg.lag, w1)
             if pattern is not None:

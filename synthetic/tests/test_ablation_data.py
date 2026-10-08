@@ -10,8 +10,7 @@ from ablation_data import (
     BASE_OVERLAP,
     W_INV_REF,
     W_REF,
-    HISTORY_DECAY_TIMES,
-    MIN_HISTORY,
+    MIN_SPINUP,
     SPINUP_DECAY_TIMES,
     B_OVERLAPS,
     MODE_OVERLAPS,
@@ -132,32 +131,16 @@ def test_structure():
         assert np.abs(ds.forced[1:] - (ds.forced[:-1] @ s.A.T + np.outer(y[1:], s.B))).max() < 1e-10
         assert abs(y.mean()) < 1e-12
         long_forcings, short_forcings, transition_time = ds.forcings()
-        assert transition_time == s.history and long_forcings.shape == (s.history + N, 1)
-        assert np.all(short_forcings[:, 0] == y) and np.all(long_forcings[:, 0] == ds.y[s.spinup - s.history:])
-        # derived from the slow mode, floored: 100 e-foldings of tau_1, or MIN_HISTORY where that is shorter
-        assert s.history == max(int(np.ceil(HISTORY_DECAY_TIMES * decay_time(s.lam1))), MIN_HISTORY)
-
-
-def test_the_spinup_outruns_the_history():
-    """The truth is generated from further back than any method sees, so it is never fully reconstructible.
-
-    HISTORY_DECAY_TIMES < SPINUP_DECAY_TIMES is what buys this, and it is a design choice rather than an
-    accident of the numbers: pushing the history multiplier up to or past the spin-up's would hand the
-    methods the entire forcing series. The margin is structural -- at 30 e-foldings the true A, B already
-    reproduce the forced response to ~1e-13 -- so nothing downstream moves if it is widened, but the
-    forcing before the window stops existing if it is closed.
-    """
-    assert HISTORY_DECAY_TIMES < SPINUP_DECAY_TIMES
-    (ds,) = slow_timescale_sweep([50], hold="modal_variance", **SMALL)
-    s = ds.system
-    assert s.history > MIN_HISTORY, s.history          # the floor is not what is being tested here
-    assert s.spinup > s.history, (s.spinup, s.history)
+        assert transition_time == s.spinup and long_forcings.shape == (s.spinup + N, 1)
+        assert np.all(short_forcings[:, 0] == y) and np.all(long_forcings[:, 0] == ds.y)
+        # derived from the longest-lived mode, floored at MIN_SPINUP where that is longer
+        assert s.spinup == max(int(np.ceil(SPINUP_DECAY_TIMES * decay_time(s.eigvals).max())), MIN_SPINUP)
 
 
 def test_spinup():
+    """The spin-up equilibrates the slowest mode: the truth starts from quasi-equilibrium, not from zero."""
     for ds in all_sweeps(**SMALL):
         s = ds.system
-        assert s.spinup >= s.history
         assert np.exp(-s.spinup / decay_time(s.eigvals).max()) < 1e-15, (ds.study, ds.param_value)
 
 

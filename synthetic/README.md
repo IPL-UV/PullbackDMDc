@@ -20,10 +20,14 @@ per (study, level, realization, method); the figures are summaries of it.
 ### Run it
 
 ```bash
-./run_synthetic_experiments.sh   # every ablation run and every figure (~4 min; the fits dominate)
+./run_synthetic_experiments.sh   # every ablation run and every figure (~2 min; the fits dominate)
 ./run_synthetic_tests.sh         # unit tests, then the end-to-end system checks
-./run_synthetic_tests.sh --list  # just list the tests
+./run_synthetic_tests.sh --only forcing   # only the matching unit tests, then the system checks
+python run_tests.py --list       # just list the unit tests
 ```
+
+Arguments to `run_synthetic_tests.sh` reach `run_tests.py` only, and the system checks run after it either
+way, so listing is done with `run_tests.py` directly.
 
 Both drivers activate the `dmdc_variants` conda env, `cd` into `synthetic/`, and export `OMP_NUM_THREADS=1`
 (the per-step simulation loop is BLAS-thread bound — about 50× less CPU time on the cluster nodes) and
@@ -47,7 +51,7 @@ dotted reference under the second's solid lines. `--from-run NAME` starts from a
 instead of the defaults, so `--from-run slow50 --set lag=3` varies one thing at a time.
 
 The `Config` fields are grouped by what they control: mode timescales, the internal variance budget, the
-forcing's shape in time, the seeds and forcing history, the sweep levels, and the methods.
+forcing's shape in time, the seeds, the sweep levels, and the methods.
 [Every `Config` field](#every-config-field) tabulates all 33 with their defaults and the symbol each one
 carries in the mathematics.
 
@@ -64,12 +68,16 @@ carries in the mathematics.
 
 ![forced relative RMSE over the SNR by tau-1 plane, one shaded and contoured panel per method](figures/ablations/baseline/results_phase_snr_timescale_baseline.png)
 
-**Which axes actually move.** Of the eight one-dimensional studies, only two things change the scores: the **slow mode's SNR**
-and **$\tau_1$**. `total_snr` and `partial_snr_slow` trace one curve (the former scales every mode's noise, the
-latter only the slow mode's — and the fast modes' SNR turns out not to matter over a 900× range), while
-`partial_snr_pair`, `partial_snr_complement`, `spatial_overlap` and `forcing_overlap` are flat to within the
-median's sampling error (spreads of 0.004–0.020 against about ±0.03). Those four are controls, not dead
-weight: the flat pair/complement columns are what establish that it is the *slow* mode's SNR doing the work.
+**Which axes actually move.** Of the eight one-dimensional studies, only two move every method's scores: the
+**slow mode's SNR** and **$\tau_1$**. `total_snr` and `partial_snr_slow` trace one curve (the former scales
+every mode's noise, the latter only the slow mode's — and the fast modes' SNR turns out not to matter over a
+900× range), while `partial_snr_pair`, `partial_snr_complement`, `spatial_overlap` and `forcing_overlap` leave
+rows (b) and (c) flat and move row (a) by 0.001–0.020 for `PullbackDMDc`, `LIM` and `LR`, against a sampling
+error of about ±0.03 on the median. `LIM-opt` is the exception: its forced relative RMSE moves far more than
+that in the two geometry studies — monotonically 0.95 → 0.74 along `spatial_overlap`, and 0.87 → 0.92 → 0.76
+along `forcing_overlap` — and by 0.05 over the pair and complement SNRs, so those two axes are not flat for
+it. The four are still controls, not dead weight: the flat pair/complement columns are what establish that it
+is the *slow* mode's SNR doing the work.
 
 ### Reproducibility
 
@@ -119,7 +127,7 @@ runs the line is the *reference* run's default.
 The phase figures score one quantity, the forced relative RMSE: the shading and the labelled black contours
 are the same levels, so a panel is its own key. The levels are absolute, so one contour means the same error
 in every panel and panels from different runs can be read against each other. A floor set by the finite
-forcing history is folded into them, but it is machine noise ($\sim10^{-13}$) now that the history scales
+forcing window is folded into them, but there is none: the methods see the whole series, so a contour scales
 with $\tau_1$, so a contour is the method's own error and nothing else.
 
 Row (a) is $\operatorname{rms}(\hat x^{(f)}-x^{(f)})/\operatorname{rms}_c(x^{(f)})$ (`score`, `centered_rms` in
@@ -171,8 +179,8 @@ slow_unstable, slow_corr, slow_angle, pair_corr, pair_angle
 ```
 
 `baseline` and `dip1` each hold 98 levels x 100 realizations x 4 methods = 39 200 rows. There is no oracle
-row: with `history` scaled to $\tau_1$ the true $A, B$ reproduce the forced response to $\sim10^{-13}$ at every
-level, so the floor it used to mark is gone by construction.
+row: the methods see the forcing back to where the truth starts, so the true $A, B$ reproduce the forced
+response exactly and the floor it used to mark is gone by construction.
 
 ### `slow_modes.npz`
 
@@ -268,15 +276,13 @@ Fields marked *(analytic)* or *(gauss)* are read only by that `forcing_source`.
 | `gauss_dip_year` | `1965` | $\mu_-$ | *(gauss)* its center (the fit is 1966.0) |
 | `gauss_dip_width_yr` | `15` | $\sigma_-$ | *(gauss)* its width (the fit is 14.1) |
 
-**Seeds and forcing history.** The three seeds are what makes a run a pure function of its config.
+**Seeds.** The three seeds are what makes a run a pure function of its config.
 
 | field | default | symbol | sets |
 |---|---|---|---|
 | `pattern_seed` | `22` | — | the Haar rotation of the complement basis in `make_W` |
 | `eigenvalue_seed` | `20` | — | the draw of the 17 complement eigenvalues |
 | `noise_seed` | `0` | — | `SeedSequence(0).spawn(2)` → the spin-up and record noise streams |
-| `history_decay_times` | `30` | — | months of forcing history given to the methods, $\max(\lceil30\,\tau(\lambda_1)\rceil,1200)$; deliberately below `SPINUP_DECAY_TIMES` $=40$ |
-| `history` | `None` | — | a literal month count overriding the derived history |
 
 **Sweep levels** — the $\ell$ of each study in [Sweeps](#sweeps-the-nine-ablations). `None` means "derive
 it from the reference geometry", which is how the base overlap lands inside its own sweep.
@@ -399,19 +405,19 @@ that study pins it (`slow_timescale_modal_variance`; see Sweeps).
 
 ### Forcing: `centered_forcing`, `forcing_series`
 **Centering, always.** The forcing is centered on the observed interval, i.e. every month after the spin-up (the record, 1850–2014):
-$$y(t)=F(Y_0+t/12)-\tfrac1N\textstyle\sum_{s=0}^{N-1}F(Y_0+s/12),\qquad t=-T_f,\dots,N-1$$
+$$y(t)=F(Y_0+t/12)-\tfrac1N\textstyle\sum_{s=0}^{N-1}F(Y_0+s/12),\qquad t=-T,\dots,N-1$$
 - **One definition.** `centered_forcing` is the only place where the centering is done.
-- **Same offset before the record.** The record mean is removed at all times, so the spin-up and the forcing history keep the same offset. This mirrors the real-world experiments, where `load_forcings_pullback` subtracts the record mean from both the record and the history.
+- **Same offset before the record.** The record mean is removed at all times, so the spin-up keeps the same offset as the record. This mirrors the real-world experiments, where `load_forcings_pullback` subtracts the record mean from both the record and the history.
 - **Used everywhere.** This one series generates the data, is the forcing passed to the methods (`forcings()` returns slices of it, unchanged), and is what every forcing plot draws (`compare_forcings.png`, `forced_response_shape.png`, and `forcing.png` under `figures/diagnostics/system/`).
 - **Enforced.** `make_dataset` asserts a zero record mean, and `test_forcing_centered_everywhere` checks every sweep level and the plotted curves.
 
-At the default, the past constant is $y=-0.666$ against a record range of $1.834$, and the history mean is $-0.586$. The forced response therefore starts in equilibrium with a negative forcing. For long $\tau_1$ it is still relaxing during the record and carries a large offset (`forced_response_ablations.png`).
+At the default, the past constant is $y=-0.666$ against a record range of $1.834$, and the mean over the 9601-month spin-up is $-0.654$. The forced response therefore starts in equilibrium with a negative forcing. For long $\tau_1$ it is still relaxing during the record and carries a large offset (`forced_response_ablations.png`).
 
 Record month $t=0,\dots,N-1$ is the fractional year $t_{\rm yr}=Y_0+t/12$, with $Y_0=\texttt{record\_end\_year}-164$. The default `record_end_year = 2014` gives a record from Jan 1850 to Dec 2014, matching the real-data experiments (`utils/data_utils.py`). Every plotted time axis is in these calendar years (`record_years`, `annual_years`, `spinup_years`).
 
 There is no amplitude parameter: $y$ carries the forcing's own units (W m⁻²) and the overall scale of the
 data is set by $B$ (below), not by the forcing. The forcing depends on absolute dates, so a longer spin-up
-or history only extends it backwards; the record values do not change.
+only extends it backwards; the record values do not change.
 
 **Default: exp + one dip** (`forcing_source = "analytic_gauss"`, `co2_forcing_gauss_model`):
 $$F(t)=c+a\,e^{(t-2014)/\tau_G}+A_+e^{-(t-\mu_+)^2/2\sigma_+^2}-A_-e^{-(t-\mu_-)^2/2\sigma_-^2}$$
@@ -433,7 +439,7 @@ $$F(t)=c+a\,e^{(t-2014)/\tau_G}+A_+e^{-(t-\mu_+)^2/2\sigma_+^2}-A_-e^{-(t-\mu_-)
 **Exp** (`forcing_source = "analytic"`, `co2_forcing_model`): $F(t)=c+a\,e^{(t-2014)/\tau_F}$, with $\tau_F=$ `forcing_efold_yr` $=60$ yr.
 - **Provenance.** The fit is least squares to the annual values 1750–2019 at mid-year (`CO2_FIT`): $c=0.0191$, $a=1.915$ and $\tau_F=59.8$ yr. Its RMSE is $0.038$ W m⁻², and $0.046$ over the record. The largest misfit is the mid-century bump.
 - **No polynomial.** A literal polynomial-plus-exponential diverges in the past, so the plain exponential is used.
-- **Constant past.** $|F-c|/(F(2014)-c)<10^{-3}$ for every year before 1590. Over the longest spin-up (10000 yr, at $\tau_1=100$ yr), the forced slow mode varies by less than $10^{-3}$ of its record range between spin-up years 1000 and 3000. The `forcing` diagnostic shows this.
+- **Constant past.** $|F-c|/(F(2014)-c)<10^{-3}$ for every year before 1590. Over the longest spin-up (4000 yr, at $\tau_1=100$ yr), the forced slow mode varies by less than $10^{-3}$ of its record range between spin-up years 1000 and 3000. The `forcing` diagnostic shows this.
 
 **File** (`forcing_source = "file"`): column `forcing_column` (default `co2`) of `forcing_file` (default `data_preparation/AR6_ERF_1750-2019.csv`; a relative path is relative to the repo root). `load_forcing_file` accepts two formats:
 - an annual CSV with a `year` column, interpolated to months with `interpolate` as for the real data;
@@ -450,20 +456,19 @@ Outside the data, $F$ is held at its first value (for AR6, $\approx0$: a constan
 ![the standardized global-mean forced response against the standardized forcing that drove it, over the record](figures/ablations/baseline/forced_response_shape.png)
 
 ### Forcing matrix: `System.y0`, `System.b_scale`, `System.B`
-$$y_0=y(-T_s),\qquad B=\frac{\hat b}{\|y_0\,(I-A)^{-1}\hat b\|_F},\qquad\text{so}\quad \|y_0\,(I-A)^{-1}B\|_F=1$$
+$$y_0=y(-T),\qquad B=\frac{\hat b}{\|y_0\,(I-A)^{-1}\hat b\|_F},\qquad\text{so}\quad \|y_0\,(I-A)^{-1}B\|_F=1$$
 The system starts the spin-up in quasi-equilibrium with the constant past forcing $y_0$, and $B$ is scaled so that this initial state has unit norm. That fixes the scale of everything: the forced response, and through `config_budget` the noise budget too.
 
 - **$\hat b$ stays raw.** `System.b` is the unit-norm pattern (`B_HAT`, the Gram values above, the pattern panels). `System.B` is derived, never stored, so every `replace` that changes an eigenvalue, $W$ or a forcing field recomputes it. The dynamics and the comparison against a fitted $B$ both use `System.B`.
 - **Per system.** $A$ enters through $(I-A)^{-1}$, so the scale is recomputed at every sweep level. $\|(I-A)^{-1}\hat b\|$ grows roughly linearly in $\tau_1$ while $V^{(f)}$ grows more slowly (a slow mode cannot equilibrate within 165 yr), so $V^{(f)}$ now *falls* with $\tau_1$: $0.574$ at $\tau_1=1$ yr, $0.265$ at $20$ yr, $0.068$ at $100$ yr.
-- **$y_0$ uses the noise spin-up $T_s$, not $T_f$.** Keying $B$ to $T_f$ would let a method setting move the generated data. Since `history_decay_times` $<$ `SPINUP_DECAY_TIMES` the padding never binds and $T_f=T_s$ anyway, but an explicit `--set history=N` can still push $T_f$ past $T_s$.
 - **Scale-invariant results.** Every budget except `slow_timescale_modal_variance`'s is proportional to that level's own $V^{(f)}$, so rescaling $B$ scales the forced response, the noise and the data by one common factor, with the same random draws. All four methods are linear and every score is a ratio, so `total_snr`, `partial_snr_*`, `slow_timescale_snr`, `spatial_overlap` and `joint_snr_timescale` are **bit-identical** to the old $V^{(f)}=M$ calibration. `slow_timescale_modal_variance` is the exception: it holds the budget fixed while $V^{(f)}$ follows $\tau_1$, so its SNR inverts (see Sweeps).
   `test_sweeps_are_invariant_to_the_b_normalization` pins this down: it re-runs one level of every study with `System.B` patched back to the raw $\hat b$ and asserts the data is proportional to $10^{-12}$ everywhere *except* that study, where it asserts the opposite. End to end, every score (`forced_corr`, `forced_rel_rmse`, `slow_tau_log_ratio`, `slow_angle`, `pair_angle`) agrees to $3\times10^{-12}$ under the two normalizations; under the raw $\hat b$ the exempt study's SNR runs $0.0024\to2.11$ with $\tau_1$ instead of $0.72\to0.085$.
 
-### Spin-up and ground truth: `System.noise_spinup`, `System.spinup`, `forced_response`, `internal_variability`
-$$T_s=\max\big(\lceil 40\,\max_k\tau(\lambda_k)\rceil,\ 1200\big),\qquad T_f=\max(T_s,\ \texttt{history}),\qquad \texttt{history}=\max\big(\lceil 30\,\tau_1\rceil,\ 1200\big)$$
-The noise spin-up $T_s$ uses the longest decay time of any mode, so it still covers the pair when $\tau_1<\tau_p$. It does not depend on the history, so changing the methods' history leaves the realizations unchanged. The forcing series and the forced response start $T_f$ months before the record. The two multipliers are ordered deliberately, $30<40$: the truth is generated from further back than any method sees, so the forced response is never fully reconstructible from the forcing on offer. `test_the_spinup_outruns_the_history` pins that ordering. The margin is structural rather than numerical -- at 30 e-foldings the true $A, B$ already reproduce the forced response to $\sim10^{-13}$ -- so widening it moves nothing, while closing it would hand the methods the entire series.
-$$x^{(f)}(t)=Ax^{(f)}(t-1)+B\,y(t),\quad x^{(f)}(-T_f)=0\qquad(\text{shared by all realizations})$$
-$$x^{(i)}(t)=Ax^{(i)}(t-1)+\xi(t),\quad x^{(i)}(-T_s)=0,\qquad x=x^{(f)}+x^{(i)}\ (\text{linear, so}\ =x-x^{(f)})$$
+### Spin-up and ground truth: `System.spinup`, `forced_response`, `internal_variability`
+$$T=\max\big(\lceil 40\,\max_k\tau(\lambda_k)\rceil,\ 1200\big)$$
+One spin-up serves both roles: it is where the truth is generated from, and it is the forcing window the methods are given (`forcings()`). It uses the longest decay time of any mode, so it still covers the pair when $\tau_1<\tau_p$, and 40 e-foldings leaves the slowest mode equilibrated to $e^{-40}\sim10^{-18}$ — `test_spinup` pins that. Because the methods see the forcing all the way back to where the truth starts, the true $A, B$ reproduce the forced response exactly; there is no truncation floor folded into any score.
+$$x^{(f)}(t)=Ax^{(f)}(t-1)+B\,y(t),\quad x^{(f)}(-T)=0\qquad(\text{shared by all realizations})$$
+$$x^{(i)}(t)=Ax^{(i)}(t-1)+\xi(t),\quad x^{(i)}(-T)=0,\qquad x=x^{(f)}+x^{(i)}\ (\text{linear, so}\ =x-x^{(f)})$$
 Times $t<0$ are discarded. Arrays are time-major: `forced` $(N,M)$, `internal` $(R,N,M)$, `data = forced + internal`.
 
 **Common random numbers:** `SeedSequence(seed).spawn(2)` gives separate spin-up and record streams. Every level of every sweep therefore uses the same record noise $\varepsilon(t)$, $t\ge0$, with $\hat\xi=\sqrt D\,\varepsilon$.
@@ -488,7 +493,7 @@ The empirical SNR is $V^{(f)}/\sum_i\operatorname{Var}_t x^{(i)}_i$ per realizat
 | pair | $\tau_p=2$ yr, $\rho=e^{-1/24}=0.959$; period 4 yr, $\theta=2\pi/48$ (ACF first zero at 12 months) |
 | complement | $\lambda_k\overset{iid}{\sim}\mathcal U(0,0.1)$, 17 values, seed 20 |
 | budget (`equal_budget`) | $s_1^2=V^{(f)},\ s_p^2=V^{(f)}/2,\ s_c^2=V^{(f)}/17\ \Rightarrow\ \mathrm{SNR}=1/3$; $V^{(f)}=0.2655$ |
-| spin-up | $T_s=9601$ months |
+| spin-up | $T=9601$ months |
 | realizations | `N_REALIZATIONS = 100` per configuration, seed 0 |
 
 ### Sweeps: the nine ablations
@@ -549,12 +554,12 @@ $$w_1\to R(\delta)\,w_1=c\,\hat b+\sqrt{1-c^2}\,u_\perp,\qquad u_\perp=\frac{w_1
 - **What it controls.** The slow mode's share of the drive is $\gamma_1=(W^{-1}\hat b)_1$: $0.520,\,0.474,\,0.462,\,0.474,\,0.512,\,0.575,\,1.000$. It is *not* monotone in $c$, because $W^{-1}$ is not orthogonal — aligning the pattern is not the same as aligning the drive. Only the endpoint is unambiguous: at $c=1$, $w_1=\hat b$ and $\gamma_1=1$, so the forcing drives the slow mode and nothing else.
 - **Not orthogonal to `spatial_overlap`.** Moving $w_1$ alone also moves its overlap with the pair plane, $0.104\to0.457\to0.605$ across the sweep. The two studies are to be read together, not as independent axes.
 
-### Fitting interface: `SyntheticDataset.forcings(history=None)`
-$$\texttt{long\_forcings}=y(-\texttt{history}),\dots,y(N-1)\ \in\mathbb R^{(\texttt{history}+N)\times1},\qquad \texttt{short\_forcings}=y(0..N-1),\qquad \texttt{transition\_time}=\texttt{history}$$
-The forcing enters at the target time, which matches `PullbackDMDc` ($x_t=Ax_{t-\text{lag}}+Bf_t$), so no shift is needed. `history` defaults to the system's own, $30\tau_1$ floored at 1200 months, so the window scales with the memory it has to reach past and its truncation error $\sim e^{-30}$ is negligible at every level; a fixed window is not, being 100 e-foldings at $\tau_1=1$ yr but a single one at 100 yr. Passing `history=N` overrides it for one call.
+### Fitting interface: `SyntheticDataset.forcings()`
+$$\texttt{long\_forcings}=y(-T),\dots,y(N-1)\ \in\mathbb R^{(T+N)\times1},\qquad \texttt{short\_forcings}=y(0..N-1),\qquad \texttt{transition\_time}=T$$
+The forcing enters at the target time, which matches `PullbackDMDc` ($x_t=Ax_{t-\text{lag}}+Bf_t$), so no shift is needed. The methods get the whole series the truth was generated from, so the window scales with the memory it has to reach past and costs the reconstruction nothing; a fixed window would not, being 100 e-foldings at $\tau_1=1$ yr but a single one at 100 yr.
 
 ### Caveats
-- **Sample variances.** For AR(1), the relative std of the sample variance over $N$ steps is $\approx\sqrt{2(1+\lambda^2)/((1-\lambda^2)N)}$, which is $0.63$ at $\tau_1=20$ yr. Mean removal also biases $\operatorname{Var}_t$ of the slow mode low.
+- **Sample variances.** For AR(1), the relative std of the sample variance over $N$ steps is $\approx\sqrt{2(1+\lambda^2)/((1-\lambda^2)N)}$, which is $0.49$ at $\tau_1=20$ yr. Mean removal also biases $\operatorname{Var}_t$ of the slow mode low.
 - **Pair identifiability.** The pair covariance is isotropic, so evaluate the pair through its plane (principal angles) and its eigenvalue, not pattern by pattern.
 - **Complement modes.** Individual modes and their forcing coefficients depend on the seed. Interpret only aggregates.
 - **Lag-$\tau$ fits.** The propagator is $A^\tau$. The fitted forcing matrix approximates $(\sum_{m<\tau}A^m)B$, so compare forced responses, not $B$.
@@ -565,8 +570,8 @@ The forcing enters at the target time, which matches `PullbackDMDc` ($x_t=Ax_{t-
 |---|---|---|
 | `plot_system_check` | `system_check.png` | eigenvectors of $A$: slow $\parallel w_1$, pair $=c(w_2+iw_3)$ (1e-10) |
 | `plot_ensemble_spaghetti` | `ensemble_spaghetti.png` | none (10 realizations + forced, annual means) |
-| `check_dmdc_recovery` | `dmdc_recovery_check.png` | noise-free, white $y$: PullbackDMDc recovers $\lambda_1$, $\rho e^{i\theta}$, $\hat b$, $w_1$ and the plane $\operatorname{span}(w_2,w_3)$ (1e-8) |
-| `check_forced_internal_split` | `forced_internal_spaghetti.png`, `forced_internal_convergence.png`, `modal_overview.png` | modal simulator equals a direct $x$-space simulation of the model (1e-9 relative); ensemble mean $\to$ forced at slope $<-0.4$. `modal_overview.png` (no asserts) has three panels: global means (raw, internal, forced), the spatial patterns, and the forcing |
+| `check_dmdc_recovery` | `dmdc_recovery_check.png` | noise-free, white $y$: PullbackDMDc recovers $\lambda_1$, $\rho e^{i\theta}$, $B$, $w_1$ and the plane $\operatorname{span}(w_2,w_3)$ (1e-8) |
+| `check_forced_internal_split` | `forced_internal_spaghetti.png`, `forced_internal_convergence.png`, `modal_overview.png` | modal simulator equals a direct $x$-space simulation of the model (1e-9 relative); ensemble mean $\to$ forced at slope $<-0.4$ and to within $15\%$ of $\operatorname{rms}_c(x^{(f)})$ at $K=256$. `modal_overview.png` (no asserts) has three panels: global means (raw, internal, forced), the spatial patterns, and the forcing |
 | `check_forced_internal_recovery` | `forced_internal_recovery.png`, `forced_internal_recovery_mse.png` | starting point only (SNR 1/3, 100 realizations): mirrored errors asserted; skill (correlation, errors, slow eigenvalue) reported, not asserted |
 
-The recovery check no longer prints an oracle: with `history` $=30\tau_1$ the true $A,B$ reproduce the forced response to $\sim10^{-13}$ at every level, so there is no truncation floor left to report and row (a) is the method's own error throughout. What degrades at long $\tau_1$ is the fit, not the window. The 165-yr record holds only $1.65$ e-foldings at $\tau_1=100$ yr, so $\hat\lambda_1$ is badly dispersed — $\hat\tau_1$ spans $33$-$440$ yr across realizations — and that dispersion is already there with the forcing removed entirely, so it is near-unit-root estimation rather than any confusion between $A$ and $B$. The reconstruction then amplifies it through $1/(1-\hat\lambda_1)$, which is why row (a) degrades steeply rather than gracefully.
+The recovery check no longer prints an oracle: the methods see the whole forcing series, so the true $A,B$ reproduce the forced response exactly and there is no truncation floor left to report — row (a) is the method's own error throughout. What degrades at long $\tau_1$ is the fit, not the window. The 165-yr record holds only $1.65$ e-foldings at $\tau_1=100$ yr, so $\hat\lambda_1$ is badly dispersed — $\hat\tau_1$ spans $21$-$480$ yr across realizations and methods — and that dispersion is already there with the forcing removed entirely, so it is near-unit-root estimation rather than any confusion between $A$ and $B$. The reconstruction then amplifies it through $1/(1-\hat\lambda_1)$, which is why row (a) degrades steeply rather than gracefully.

@@ -9,7 +9,6 @@ from plot_style import save, zero_line
 from ablation_data import (
     BASE_OVERLAP,
     annual_years,
-    N,
     PARTIAL_SNR_COMPONENTS,
     PHI,
     REFERENCE,
@@ -21,6 +20,7 @@ from ablation_data import (
     modal_coordinates,
     pair_plane_overlap,
     record_years,
+    spinup_years,
     partial_snr_sweep,
     slow_timescale_sweep,
     forcing_overlap_sweep,
@@ -82,9 +82,9 @@ def plot_calibration(ds, path):
 
     fig, axes = plt.subplots(2, 4, figsize=(20, 8))
     record = record_years(s)
-    t_hist = record[0] + np.arange(-s.history, N) / 12
-    axes[0, 0].plot(t_hist, ds.y[s.spinup - s.history:], color="k")
-    axes[0, 0].axvspan(t_hist[0], record[0], color="0.9", label="forcing history")
+    t_forcing = spinup_years(s)
+    axes[0, 0].plot(t_forcing, ds.y, color="k")
+    axes[0, 0].axvspan(t_forcing[0], record[0], color="0.9", label="spin-up")
     axes[0, 0].set_title("forcing y(t)")
     axes[0, 0].set_xlabel("year")
     axes[0, 0].legend()

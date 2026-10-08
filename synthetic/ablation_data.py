@@ -7,7 +7,7 @@ import pathlib
 import sys
 from dataclasses import dataclass, replace
 from functools import cached_property, lru_cache, partial
-from typing import Callable, Optional, Tuple
+from typing import Callable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -23,12 +23,10 @@ M = 20
 N = 1980  # record length in months: Jan 1850 - Dec 2014, as in the real-data experiments
 SPINUP_DECAY_TIMES = 40
 SPINUP_CHUNK = 1200
-MIN_NOISE_SPINUP = 1200
+MIN_SPINUP = 1200  # the floor on the derived spin-up: a century, the shortest window worth giving a method
 PARTIAL_SNR_COMPONENTS = dict(slow="s1_sq", pair="sp_sq", complement="sc_sq")
 SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 
-HISTORY_DECAY_TIMES = DEFAULT.history_decay_times
-MIN_HISTORY = 1200  # the floor on the derived history: a century, the shortest window worth giving a method
 RECORD_END_YEAR = DEFAULT.record_end_year
 AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
 # Least-squares fits to the annual AR6 CO2 ERF, 1750-2019; see README.md for their quality and for how
@@ -78,8 +76,6 @@ class System:
     s1_sq: float = np.nan
     sp_sq: float = np.nan
     sc_sq: float = np.nan
-    history_override: Optional[int] = None    # literal month count; None derives it from lam1
-    history_decay_times: int = HISTORY_DECAY_TIMES
     record_end_year: int = RECORD_END_YEAR
     forcing_efold_yr: float = FORCING_EFOLD_YR
     forcing_source: str = DEFAULT.forcing_source
@@ -118,37 +114,21 @@ class System:
         return self.modal_variances * (1 - np.abs(self.eigvals) ** 2)
 
     @property
-    def history(self):
-        """Months of forcing history the methods and the reconstruction get.
-
-        `history_decay_times` e-foldings of the SLOW mode, floored at MIN_HISTORY. Keyed to lam1 rather than
-        to the slowest eigenvalue (as `noise_spinup` is) because it is the slow mode's memory that the
-        reconstruction has to reach back past; the two differ only where the pair outlives the slow mode,
-        at tau_1 = 1 yr, and the floor covers that. Derived rather than fixed so a tau_1 sweep gives every
-        level a window matched to its own memory: a flat 1200 months is 100 e-foldings at tau_1 = 1 yr but
-        a single one at 100 yr, which leaves the reconstruction short of its own equilibrium offset.
-        """
-        if self.history_override is not None:
-            return self.history_override
-        return max(int(np.ceil(self.history_decay_times * decay_time(self.lam1))), MIN_HISTORY)
-
-    @property
-    def noise_spinup(self):
-        # independent of history, so changing the methods' forcing history leaves the realizations unchanged
-        return max(int(np.ceil(SPINUP_DECAY_TIMES * decay_time(self.eigvals).max())), MIN_NOISE_SPINUP)
-
-    @property
     def spinup(self):
-        return max(self.noise_spinup, self.history)
+        """Months before the record: where the truth is generated from, and the forcing window the methods get.
+
+        `SPINUP_DECAY_TIMES` e-foldings of the longest-lived mode, floored at MIN_SPINUP. The max over all
+        eigenvalues keeps the oscillating pair covered when it outlives the slow mode, at tau_1 = 1 yr.
+        Derived rather than fixed so a tau_1 sweep gives every level a window matched to its own memory:
+        a flat 1200 months is 100 e-foldings at tau_1 = 1 yr but a single one at 100 yr, which leaves the
+        reconstruction short of its own equilibrium offset.
+        """
+        return max(int(np.ceil(SPINUP_DECAY_TIMES * decay_time(self.eigvals).max())), MIN_SPINUP)
 
     @cached_property
     def y0(self):
-        """The forcing at the first month of the NOISE spin-up, which B is normalized against.
-
-        Keying B to `spinup` instead would let the methods' history move the generated data
-        (test_history_override). The forcing is near-constant that far back, so the two agree in practice.
-        """
-        return centered_forcing(self, record_years(self)[0] - self.noise_spinup / 12)
+        """The forcing at the first month of the spin-up, which B is normalized against."""
+        return centered_forcing(self, record_years(self)[0] - self.spinup / 12)
 
     @cached_property
     def b_scale(self):
@@ -307,8 +287,8 @@ def internal_variability(system, n_realizations, seed):
     spinup_rng, record_rng = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2))
     noise_std = np.sqrt(system.noise_variances)
     z = np.zeros((n_realizations, M))
-    for start in range(0, system.noise_spinup, SPINUP_CHUNK):
-        steps = min(SPINUP_CHUNK, system.noise_spinup - start)
+    for start in range(0, system.spinup, SPINUP_CHUNK):
+        steps = min(SPINUP_CHUNK, system.spinup - start)
         z = run_modal(system.Lambda_R, noise_std * spinup_rng.standard_normal((steps, n_realizations, M)), z)[-1]
     z = run_modal(system.Lambda_R, noise_std * record_rng.standard_normal((N, n_realizations, M)), z)
     return (z @ system.W.T).transpose(1, 0, 2)
@@ -417,10 +397,10 @@ class SyntheticDataset:
         s = self.system
         return theoretical_snr(self.V_f, s.s1_sq, s.sp_sq, s.sc_sq)
 
-    def forcings(self, history=None):
-        history = self.system.history if history is None else history
-        long_forcings = self.y[self.system.spinup - history:, None]
-        return long_forcings, long_forcings[history:], history
+    def forcings(self):
+        """(long, short, transition_time): the whole forcing series, its record tail, and the spin-up between."""
+        long_forcings = self.y[:, None]
+        return long_forcings, long_forcings[self.system.spinup:], self.system.spinup
 
 
 def make_dataset(system, budget, *, study="", param_name="", param_value=np.nan,
@@ -474,7 +454,6 @@ def build_reference(cfg=DEFAULT):
         W=W, W_inv=W_inv, b=b,
         lam1=eigenvalue_yr(cfg.tau1_yr), rho=eigenvalue_yr(cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
         lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
-        history_override=cfg.history, history_decay_times=cfg.history_decay_times,
         record_end_year=cfg.record_end_year, forcing_efold_yr=cfg.forcing_efold_yr,
         forcing_source=cfg.forcing_source, forcing_file=cfg.forcing_file, forcing_column=cfg.forcing_column,
         **{f: getattr(cfg, f) for f in GAUSS_FIELDS},

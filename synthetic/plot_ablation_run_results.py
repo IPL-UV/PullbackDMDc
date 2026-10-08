@@ -54,7 +54,8 @@ SWEEP_STUDIES = {
 # the columns of the default figure, left to right; --studies overrides it. These are the three axes the
 # score actually moves along: total SNR, tau_1, and the slow mode's own SNR. The geometry studies
 # (spatial_overlap, forcing_overlap) and the pair/complement partial SNRs are still run and still scored --
-# they are flat to within the median's sampling error, and --studies brings any of them back.
+# they are flat to within the median's sampling error for every method but LIM-opt, whose forced RMSE falls
+# across both geometry studies (see README.md), and --studies brings any of them back.
 DEFAULT_STUDIES = ("total_snr", "slow_timescale_modal_variance", "partial_snr_slow")
 PAIR_STUDIES = {"partial_snr_pair"}  # studies scored on the oscillating pair rather than the slow mode
 LINEAR_X = {"spatial_overlap", "forcing_overlap"}  # cosines, so a log x-axis would be meaningless
@@ -64,9 +65,9 @@ VARIANT_LINESTYLES = ["-", "--", "-."]
 DEFAULT_LINE_STYLE = dict(color="0.75", linewidth=0.8, zorder=0)  # marks the default system in a sweep column
 # The phase figure maps one quantity, the forced relative RMSE: shaded by it, contoured in black at the levels
 # below and labelled on the lines, so it carries its own key. The levels are absolute, so one contour means the
-# same error in every panel and panels from different runs can be read against each other. A floor set by the
-# finite forcing history is folded into them -- 0.003 at tau_1 = 20 yr but 0.75 at 100 yr, where `history` is
-# one e-folding -- but it stays well below the methods' own error across the whole range.
+# same error in every panel and panels from different runs can be read against each other. There is no floor
+# from a finite forcing window folded into them: the methods see the whole forcing series, back to where the
+# truth itself starts, so a contour is the method's own error and nothing else.
 PHASE_METRIC, PHASE_LABEL = "forced_rel_rmse", "forced relative RMSE"
 PHASE_CMAP, PHASE_CHANGE_CMAP = "Purples_r", "RdBu_r"
 RMSE_LEVELS = (0.25, 0.5, 0.75, 1.0, 1.5)  # 0.5 is the skill threshold the old single contour marked

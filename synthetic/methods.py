@@ -24,16 +24,16 @@ def identity_eofs(data):
     return {"data_mean": np.zeros(M), "eofs": np.eye(M), "pcs": data}
 
 
-def fit_pullback(data, long_forcings, short_forcings, history, lag=1):
-    model = PullbackDMDc(truncation=M, lag=lag, transition_time=history)
+def fit_pullback(data, long_forcings, short_forcings, spinup, lag=1):
+    model = PullbackDMDc(truncation=M, lag=lag, transition_time=spinup)
     model.fit(data, short_forcings=short_forcings, long_forcings=long_forcings,
               precomputed_eofs=identity_eofs(data))
     model.compute_modes()
     return model
 
 
-def fit_pullback_dmdc(data, long_forcings, short_forcings, history, lag=1):
-    model = fit_pullback(data, long_forcings, short_forcings, history, lag=lag)
+def fit_pullback_dmdc(data, long_forcings, short_forcings, spinup, lag=1):
+    model = fit_pullback(data, long_forcings, short_forcings, spinup, lag=lag)
     return model.predict(), model.A
 
 

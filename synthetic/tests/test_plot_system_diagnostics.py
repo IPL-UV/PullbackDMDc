@@ -15,7 +15,7 @@ from plot_system_diagnostics import (
 
 
 def test_tau1_diagnostics_and_response_plots():
-    # the short levels only: tau_1 = 100 yr costs a 120 000-month spin-up and adds nothing here
+    # the short levels only: tau_1 = 100 yr costs a 48 000-month spin-up and adds nothing here
     taus = (1, 2, 5)
     cfg = with_overrides(DEFAULT, [f"slow_timescales_yr={taus}", "total_snrs=(0.1,1,10)"])
     datasets = level_datasets(cfg, "slow_timescale_snr", taus)

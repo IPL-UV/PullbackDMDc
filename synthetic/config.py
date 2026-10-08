@@ -21,7 +21,7 @@ from typing import Optional, Tuple
 
 SYNTHETIC_DIR = pathlib.Path(__file__).resolve().parent
 RESULTS_DIR = SYNTHETIC_DIR / "results"
-LEGACY_KEYS = {"forced_variance"}  # dropped fields that older results/*/config.json still carry
+LEGACY_KEYS = {"forced_variance", "history", "history_decay_times"}  # dropped fields older configs carry
 
 
 @dataclass(frozen=True)
@@ -61,21 +61,10 @@ class Config:
     gauss_dip_year: float = 1965
     gauss_dip_width_yr: float = 15  # sigma (> 0)
 
-    # --- seeds and forcing history ----------------------------------------------------------
+    # --- seeds ------------------------------------------------------------------------------
     pattern_seed: int = 22
     eigenvalue_seed: int = 20
     noise_seed: int = 0
-    # Forcing history given to the methods, in months. `history_decay_times` e-foldings of the slow mode,
-    # floored at MIN_HISTORY, so every sweep level gets a window matched to its own memory rather than one
-    # fixed length that is generous at tau_1 = 1 yr and a single e-folding at 100 yr. `history` overrides it
-    # with a literal month count (--set history=2400); None derives it.
-    #
-    # 30 is deliberately below SPINUP_DECAY_TIMES (40): the spin-up that generates the truth then reaches
-    # further back than the window any method sees, so the forced response is never fully reconstructible
-    # from the forcing on offer. The margin is structural, not numerical -- at 30 e-foldings the true A, B
-    # already reproduce the truth to 2e-13 -- and keeping it small is what keeps the long integration cheap.
-    history_decay_times: int = 30
-    history: Optional[int] = None
 
     # --- sweep levels -----------------------------------------------------------------------
     total_snrs: Tuple[float, ...] = (1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30)
