@@ -5,7 +5,7 @@ import numpy as np
 from ablation_data import M, REFERENCE, build_reference, drive_modal, equal_budget, make_dataset
 from config import DEFAULT, with_overrides
 from methods import fit_pullback
-from run_ablation_studies import oracle_forced, rms, slow_index  # noqa: F401  (re-exported)
+from run_ablation_studies import centered_rms, rms, slow_index  # noqa: F401  (re-exported)
 
 SMALL = dict(n_realizations=2)
 
@@ -55,8 +55,8 @@ def recovery_metrics(ds):
         internal_est = data - forced_est
         rows.append(dict(
             forced_corr=np.corrcoef(forced_est.ravel(), ds.forced.ravel())[0, 1],
-            forced_err=rms(forced_est - ds.forced) / rms(ds.forced),
-            internal_err=rms(internal_est - internal) / rms(internal),
+            forced_err=rms(forced_est - ds.forced) / centered_rms(ds.forced),
+            internal_err=rms(internal_est - internal) / centered_rms(internal),
             mirror=np.abs((forced_est - ds.forced) + (internal_est - internal)).max(),
             slow_eig=model.eigvals[slow_index(model.eigvals, system.lam1)].real,
             forced_mse=((forced_est - ds.forced) ** 2).mean(axis=0),

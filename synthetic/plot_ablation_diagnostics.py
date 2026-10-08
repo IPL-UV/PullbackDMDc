@@ -23,6 +23,7 @@ from ablation_data import (
     record_years,
     partial_snr_sweep,
     slow_timescale_sweep,
+    forcing_overlap_sweep,
     spatial_overlap_sweep,
     total_snr_sweep,
 )
@@ -247,6 +248,7 @@ def main():
     partial = {c: partial_snr_sweep(c, **kwargs) for c in PARTIAL_SNR_COMPONENTS}
     timescale = {hold: slow_timescale_sweep(hold=hold, **kwargs) for hold in SLOW_TIMESCALE_HOLDS}
     spatial = spatial_overlap_sweep(**kwargs)
+    forcing = forcing_overlap_sweep(**kwargs)
 
     plot_calibration(make_dataset(REFERENCE, equal_budget, **kwargs), FIGURES_DIR / "calibration.png")
     plot_sweep(total, FIGURES_DIR / "total_snr.png", "total SNR: all modal variances scaled together")
@@ -259,6 +261,9 @@ def main():
                    extra_title="internal autocorrelation (dotted: theory)")
     plot_sweep(spatial, FIGURES_DIR / "spatial_overlap.png",
                "spatial overlap: slow mode tilts into the pair plane", extra=mode_shape_panel,
+               extra_title="mode shapes vs latitude")
+    plot_sweep(forcing, FIGURES_DIR / "forcing_overlap.png",
+               r"forcing overlap: slow mode rotates toward $\hat b$", extra=mode_shape_panel,
                extra_title="mode shapes vs latitude")
     plot_summary(total, partial, timescale, spatial, FIGURES_DIR / "summary.png")
 

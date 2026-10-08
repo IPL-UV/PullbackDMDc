@@ -6,10 +6,14 @@ import numpy as np
 
 from ablation_data import (
     M,
+    BASE_B_OVERLAP,
     BASE_OVERLAP,
     W_INV_REF,
     W_REF,
-    HISTORY,
+    HISTORY_DECAY_TIMES,
+    MIN_HISTORY,
+    SPINUP_DECAY_TIMES,
+    B_OVERLAPS,
     MODE_OVERLAPS,
     N,
     PARTIAL_SNR_COMPONENTS,
@@ -21,6 +25,8 @@ from ablation_data import (
     TOTAL_SNRS,
     decay_time,
     eigenvalue_yr,
+    forcing_overlap,
+    forcing_overlap_sweep,
     forced_response,
     forced_variance,
     equal_budget,
@@ -29,10 +35,26 @@ from ablation_data import (
     pair_plane_overlap,
     partial_snr_sweep,
     slow_timescale_sweep,
+    rotate_slow_to_b,
     spatial_overlap_sweep,
     total_snr_sweep,
 )
 from support import SMALL, assert_unit_b_scale
+
+
+# one level per study for test_sweeps_are_invariant_to_the_b_normalization; the slow-timescale levels
+# are away from the reference tau_1 = 20 yr, where the two normalizations would agree by construction
+INVARIANCE_LEVELS = (
+    ("total_snr", 1 / 3),
+    ("partial_snr_slow", 4),
+    ("partial_snr_pair", 4),
+    ("partial_snr_complement", 4),
+    ("slow_timescale_snr", 100),
+    ("spatial_overlap", 0.75),
+    ("forcing_overlap", 0.9),
+    ("joint_snr_timescale", (1, 100)),
+    ("slow_timescale_modal_variance", 100),
+)
 
 
 def all_sweeps(**kwargs):
@@ -40,7 +62,7 @@ def all_sweeps(**kwargs):
         total_snr_sweep(**kwargs)
         + [ds for c in PARTIAL_SNR_COMPONENTS for ds in partial_snr_sweep(c, **kwargs)]
         + slow_timescale_sweep(hold="snr", **kwargs) + slow_timescale_sweep(hold="modal_variance", **kwargs)
-        + spatial_overlap_sweep(**kwargs)
+        + spatial_overlap_sweep(**kwargs) + forcing_overlap_sweep(**kwargs)
     )
 
 
@@ -67,6 +89,39 @@ def test_slow_timescale():
                 assert all(getattr(ds.system, k) == v for k, v in REFERENCE_BUDGET.items())
 
 
+def test_sweeps_are_invariant_to_the_b_normalization():
+    """Rescaling B rescales the data, so every score is unchanged -- except in one study.
+
+    Every budget is proportional to that level's own V_f (config_budget), so scaling B scales the
+    forced response, the noise and the data by one common factor with the same random draws; the
+    methods are linear and every score is a ratio. slow_timescale_modal_variance is the exception:
+    it pins the budget to the reference while V_f follows tau_1, so the ratio of forced to internal
+    amplitude -- and with it the SNR -- depends on how B is normalized. That is intended (the study
+    asks what happens when internal variability keeps its size), and this test pins it down so the
+    dependence cannot spread to the other studies unnoticed.
+    """
+    import ablation_data as data
+
+    scaled = {study: data.sweep(study, [level], **SMALL) for study, level in INVARIANCE_LEVELS}
+    original_B = data.System.B
+    try:
+        data.System.B = property(lambda self: self.b)  # the raw unit pattern, before System.b_scale
+        data.build_reference.cache_clear()
+        raw = {study: data.sweep(study, [level], **SMALL) for study, level in INVARIANCE_LEVELS}
+    finally:
+        data.System.B = original_B
+        data.build_reference.cache_clear()
+
+    for study, _ in INVARIANCE_LEVELS:
+        (a,), (b,) = scaled[study], raw[study]
+        factor = np.linalg.norm(b.data) / np.linalg.norm(a.data)
+        error = np.abs(b.data - factor * a.data).max() / np.abs(b.data).max()
+        if study == "slow_timescale_modal_variance":
+            assert error > 0.1 and abs(b.snr / a.snr - 1) > 0.5, study
+        else:
+            assert error < 1e-12 and abs(b.snr / a.snr - 1) < 1e-12, (study, error)
+
+
 def test_structure():
     for ds in all_sweeps(**SMALL):
         s = ds.system
@@ -77,14 +132,32 @@ def test_structure():
         assert np.abs(ds.forced[1:] - (ds.forced[:-1] @ s.A.T + np.outer(y[1:], s.B))).max() < 1e-10
         assert abs(y.mean()) < 1e-12
         long_forcings, short_forcings, transition_time = ds.forcings()
-        assert transition_time == HISTORY and long_forcings.shape == (HISTORY + N, 1)
-        assert np.all(short_forcings[:, 0] == y) and np.all(long_forcings[:, 0] == ds.y[s.spinup - HISTORY:])
+        assert transition_time == s.history and long_forcings.shape == (s.history + N, 1)
+        assert np.all(short_forcings[:, 0] == y) and np.all(long_forcings[:, 0] == ds.y[s.spinup - s.history:])
+        # derived from the slow mode, floored: 100 e-foldings of tau_1, or MIN_HISTORY where that is shorter
+        assert s.history == max(int(np.ceil(HISTORY_DECAY_TIMES * decay_time(s.lam1))), MIN_HISTORY)
+
+
+def test_the_spinup_outruns_the_history():
+    """The truth is generated from further back than any method sees, so it is never fully reconstructible.
+
+    HISTORY_DECAY_TIMES < SPINUP_DECAY_TIMES is what buys this, and it is a design choice rather than an
+    accident of the numbers: pushing the history multiplier up to or past the spin-up's would hand the
+    methods the entire forcing series. The margin is structural -- at 30 e-foldings the true A, B already
+    reproduce the forced response to ~1e-13 -- so nothing downstream moves if it is widened, but the
+    forcing before the window stops existing if it is closed.
+    """
+    assert HISTORY_DECAY_TIMES < SPINUP_DECAY_TIMES
+    (ds,) = slow_timescale_sweep([50], hold="modal_variance", **SMALL)
+    s = ds.system
+    assert s.history > MIN_HISTORY, s.history          # the floor is not what is being tested here
+    assert s.spinup > s.history, (s.spinup, s.history)
 
 
 def test_spinup():
     for ds in all_sweeps(**SMALL):
         s = ds.system
-        assert s.spinup >= HISTORY
+        assert s.spinup >= s.history
         assert np.exp(-s.spinup / decay_time(s.eigvals).max()) < 1e-15, (ds.study, ds.param_value)
 
 
@@ -132,6 +205,39 @@ def test_spatial_overlap():
         assert abs(ds.snr - 1 / 3) < 1e-12
     base = sweep[MODE_OVERLAPS.index(BASE_OVERLAP)].system
     assert np.abs(base.W - W_REF).max() < 1e-12 and np.abs(base.W_inv - W_INV_REF).max() < 1e-10
+
+
+def test_forcing_overlap():
+    """w_1 is rotated toward b-hat and nothing else moves."""
+    b = REFERENCE.b
+    sweep = forcing_overlap_sweep(**SMALL)
+    for ds, overlap in zip(sweep, B_OVERLAPS):
+        W = ds.system.W
+        assert abs(forcing_overlap(W, b) - overlap) < 1e-12, overlap
+        assert abs(np.linalg.norm(W[:, 0]) - 1) < 1e-12, "a rotation preserves the norm"
+        assert np.all(W[:, 1:] == W_REF[:, 1:]), "only the slow mode moves"
+        assert np.array_equal(ds.system.b, b), "the forcing pattern itself does not move"
+        # w_1 leaves span(S), so [pinv(S); Q_perp.T] is no longer the inverse and np.linalg.inv is used
+        assert np.abs(ds.system.W_inv @ W - np.eye(len(W))).max() < 1e-10
+        assert abs(ds.snr - 1 / 3) < 1e-12
+    base = sweep[B_OVERLAPS.index(BASE_B_OVERLAP)].system
+    assert np.abs(base.W - W_REF).max() < 1e-12 and np.abs(base.W_inv - W_INV_REF).max() < 1e-10
+
+
+def test_forcing_overlap_matches_the_closed_form():
+    """The rotation equals c b-hat + sqrt(1 - c^2) u_perp, which is what the README documents."""
+    b, w1 = REFERENCE.b, W_REF[:, 0] / np.linalg.norm(W_REF[:, 0])
+    perpendicular = w1 - (w1 @ b) * b
+    u_perp = perpendicular / np.linalg.norm(perpendicular)
+    for c in (0.0, 0.25, 0.5, BASE_B_OVERLAP, 0.8, 0.9, 1.0):
+        W, _ = rotate_slow_to_b(W_REF, b, c)
+        assert np.abs(W[:, 0] - (c * b + np.sqrt((1 - c) * (1 + c)) * u_perp)).max() < 1e-12, c
+    for bad in (-1.5, 1.0000001, 2.0):
+        try:
+            rotate_slow_to_b(W_REF, b, bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"overlap {bad} outside [-1, 1] should raise, not return nan")
 
 
 def test_common_random_numbers():

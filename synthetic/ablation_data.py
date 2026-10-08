@@ -7,7 +7,7 @@ import pathlib
 import sys
 from dataclasses import dataclass, replace
 from functools import cached_property, lru_cache, partial
-from typing import Callable, Tuple
+from typing import Callable, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -27,7 +27,8 @@ MIN_NOISE_SPINUP = 1200
 PARTIAL_SNR_COMPONENTS = dict(slow="s1_sq", pair="sp_sq", complement="sc_sq")
 SLOW_TIMESCALE_HOLDS = ("snr", "modal_variance")
 
-HISTORY = DEFAULT.history
+HISTORY_DECAY_TIMES = DEFAULT.history_decay_times
+MIN_HISTORY = 1200  # the floor on the derived history: a century, the shortest window worth giving a method
 RECORD_END_YEAR = DEFAULT.record_end_year
 AR6_ERF_PATH = REPO_ROOT / "data_preparation" / "AR6_ERF_1750-2019.csv"
 # Least-squares fits to the annual AR6 CO2 ERF, 1750-2019; see README.md for their quality and for how
@@ -77,7 +78,8 @@ class System:
     s1_sq: float = np.nan
     sp_sq: float = np.nan
     sc_sq: float = np.nan
-    history: int = HISTORY
+    history_override: Optional[int] = None    # literal month count; None derives it from lam1
+    history_decay_times: int = HISTORY_DECAY_TIMES
     record_end_year: int = RECORD_END_YEAR
     forcing_efold_yr: float = FORCING_EFOLD_YR
     forcing_source: str = DEFAULT.forcing_source
@@ -114,6 +116,21 @@ class System:
     @property
     def noise_variances(self):
         return self.modal_variances * (1 - np.abs(self.eigvals) ** 2)
+
+    @property
+    def history(self):
+        """Months of forcing history the methods and the reconstruction get.
+
+        `history_decay_times` e-foldings of the SLOW mode, floored at MIN_HISTORY. Keyed to lam1 rather than
+        to the slowest eigenvalue (as `noise_spinup` is) because it is the slow mode's memory that the
+        reconstruction has to reach back past; the two differ only where the pair outlives the slow mode,
+        at tau_1 = 1 yr, and the floor covers that. Derived rather than fixed so a tau_1 sweep gives every
+        level a window matched to its own memory: a flat 1200 months is 100 e-foldings at tau_1 = 1 yr but
+        a single one at 100 yr, which leaves the reconstruction short of its own equilibrium offset.
+        """
+        if self.history_override is not None:
+            return self.history_override
+        return max(int(np.ceil(self.history_decay_times * decay_time(self.lam1))), MIN_HISTORY)
 
     @property
     def noise_spinup(self):
@@ -340,6 +357,43 @@ def tilt_slow(W, overlap):
     return W, W_inv
 
 
+def forcing_overlap(W, b):
+    """cos angle(w_1, b-hat): how far the slow mode's pattern points along the forcing's."""
+    return abs(W[:, 0] @ b) / np.linalg.norm(W[:, 0])
+
+
+def rotate_slow_to_b(W, b, overlap):
+    """Rotate w_1 to cos angle(w_1, b) = overlap, within span(w_1, b); no other mode moves.
+
+    R is the Givens rotation of that plane and the identity on its complement, so w_1 travels along the
+    unit sphere's geodesic toward b. Unlike tilt_slow's w_1, this one leaves span(S), so Q_perp.T w_1 is
+    no longer 0 and [pinv(S); Q_perp.T] is no longer the inverse: W_inv is the exact inverse instead.
+
+    No angle is ever formed. arccos loses precision like 1 / sqrt(1 - x^2), so delta = angle(w_1, b) -
+    arccos(overlap) would be noisy exactly where the sweep is most interesting -- w_1 near b, or a level
+    near +-1. The subtraction identities need only the cosine and sine of each angle, and both are
+    available without cancellation: the first angle's sine is the norm of the perpendicular component,
+    and 1 - overlap^2 is factored as (1 - overlap)(1 + overlap).
+    """
+    if not -1 <= overlap <= 1:
+        raise ValueError(f"forcing overlap must be a cosine in [-1, 1]; got {overlap!r}")
+    u = W[:, 0] / np.linalg.norm(W[:, 0])
+    perpendicular = b - (b @ u) * u  # b is already unit norm
+    cos_a, sin_a = u @ b, np.linalg.norm(perpendicular)  # sin_a >= 0, and is a norm, so no cancellation
+    if sin_a < 1e-12:
+        raise ValueError("w_1 is already parallel to b: the rotation plane is undefined")
+    e2 = perpendicular / sin_a
+    cos_c, sin_c = overlap, np.sqrt((1 - overlap) * (1 + overlap))
+    cos_d = cos_a * cos_c + sin_a * sin_c  # cos(alpha - beta)
+    sin_d = sin_a * cos_c - cos_a * sin_c  # sin(alpha - beta)
+    R = (np.eye(M)
+         + (cos_d - 1) * (np.outer(u, u) + np.outer(e2, e2))
+         + sin_d * (np.outer(e2, u) - np.outer(u, e2)))
+    W = W.copy()
+    W[:, 0] = R @ W[:, 0]
+    return W, np.linalg.inv(W)
+
+
 @dataclass(eq=False)
 class SyntheticDataset:
     study: str
@@ -401,6 +455,8 @@ class Reference:
     snr: float
     base_overlap: float
     mode_overlaps: Tuple[float, ...]
+    base_b_overlap: float
+    b_overlaps: Tuple[float, ...]
     phi: np.ndarray
 
 
@@ -418,7 +474,8 @@ def build_reference(cfg=DEFAULT):
         W=W, W_inv=W_inv, b=b,
         lam1=eigenvalue_yr(cfg.tau1_yr), rho=eigenvalue_yr(cfg.tau_p_yr), theta=2 * np.pi / (12 * cfg.period_p_yr),
         lam_c=np.random.default_rng(cfg.eigenvalue_seed).uniform(*cfg.complement_eig_range, size=M - 3),
-        history=cfg.history, record_end_year=cfg.record_end_year, forcing_efold_yr=cfg.forcing_efold_yr,
+        history_override=cfg.history, history_decay_times=cfg.history_decay_times,
+        record_end_year=cfg.record_end_year, forcing_efold_yr=cfg.forcing_efold_yr,
         forcing_source=cfg.forcing_source, forcing_file=cfg.forcing_file, forcing_column=cfg.forcing_column,
         **{f: getattr(cfg, f) for f in GAUSS_FIELDS},
     )
@@ -428,8 +485,11 @@ def build_reference(cfg=DEFAULT):
     budget = config_budget(reference_V_f, cfg)
     base_overlap = pair_plane_overlap(W)
     overlaps = cfg.mode_overlaps if cfg.mode_overlaps is not None else (0.0, 0.25, base_overlap, 0.75, 0.9, 0.95)
+    base_b_overlap = forcing_overlap(W, b)
+    b_overlaps = cfg.b_overlaps if cfg.b_overlaps is not None else (0.0, 0.25, 0.5, base_b_overlap, 0.8, 0.9, 1.0)
     return Reference(system=system, budget=budget, snr=theoretical_snr(reference_V_f, **budget),
-                     base_overlap=base_overlap, mode_overlaps=tuple(overlaps), phi=phi)
+                     base_overlap=base_overlap, mode_overlaps=tuple(overlaps),
+                     base_b_overlap=base_b_overlap, b_overlaps=tuple(b_overlaps), phi=phi)
 
 
 _REF = build_reference(DEFAULT)
@@ -439,6 +499,8 @@ REFERENCE = _REF.system
 REFERENCE_BUDGET = dict(_REF.budget)
 BASE_OVERLAP = _REF.base_overlap
 MODE_OVERLAPS = list(_REF.mode_overlaps)
+BASE_B_OVERLAP = _REF.base_b_overlap
+B_OVERLAPS = list(_REF.b_overlaps)
 
 
 # One row per study: how its levels are enumerated, how each level bends the reference system, and what
@@ -455,6 +517,11 @@ class Study:
 
 def _tilted(ref, overlap):
     W, W_inv = tilt_slow(ref.system.W, overlap)
+    return replace(ref.system, W=W, W_inv=W_inv)
+
+
+def _rotated_to_b(ref, overlap):
+    W, W_inv = rotate_slow_to_b(ref.system.W, ref.system.b, overlap)
     return replace(ref.system, W=W, W_inv=W_inv)
 
 
@@ -482,6 +549,11 @@ STUDIES = {
         param_name="mode overlap",
         levels=lambda ref, cfg: list(ref.mode_overlaps),
         system=_tilted,
+    ),
+    "forcing_overlap": Study(
+        param_name=r"$\cos\angle(w_1,\hat b)$",
+        levels=lambda ref, cfg: list(ref.b_overlaps),
+        system=_rotated_to_b,
     ),
     "joint_snr_timescale": Study(
         param_name="SNR",
@@ -521,6 +593,10 @@ def slow_timescale_sweep(taus_yr=None, hold="snr", cfg=DEFAULT, **kwargs):
 
 def spatial_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
     return sweep("spatial_overlap", overlaps, cfg, **kwargs)
+
+
+def forcing_overlap_sweep(overlaps=None, cfg=DEFAULT, **kwargs):
+    return sweep("forcing_overlap", overlaps, cfg, **kwargs)
 
 
 def joint_sweep(snrs=None, taus_yr=None, cfg=DEFAULT, **kwargs):

@@ -4,7 +4,7 @@
     python plot_system_diagnostics.py --set tau1_yr=50 slow_variance=0.5      # tweaked reference system
     python plot_system_diagnostics.py --study slow_timescale_snr --level 100  # one sweep dataset
     python plot_system_diagnostics.py --from-run baseline --plots modal_overview
-    python plot_system_diagnostics.py --plots forced_response_tau1            # forced responses at tau1 = 1, 20, 100 yr
+    python plot_system_diagnostics.py --plots forced_response_ablations      # global means by tau1 and by SNR
     python plot_system_diagnostics.py --plots forced_response_shape           # forced-response shape against the forcing
 
 Every forcing shown is centered on the record (see README.md).
@@ -18,6 +18,8 @@ from functools import partial
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import cm
+from matplotlib.colors import LogNorm, Normalize
 
 from ablation_data import (
     M,
@@ -36,6 +38,7 @@ from ablation_data import (
     global_mean,
     make_dataset,
     record_years,
+    rotate_slow_to_b,
     spinup_years,
 )
 from config import DEFAULT, config_diff, load_config, slug
@@ -43,7 +46,6 @@ from plot_ablation_diagnostics import annual, lat_label, standardized
 from plot_style import (
     PAGE_W,
     PANEL_TITLE,
-    TALL_ROW,
     forcing_panel,
     record_span,
     residual_panel,
@@ -56,8 +58,7 @@ FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "diagnostics
 MODAL_OVERVIEW_SHOWN = 10
 N_COLS = 5
 LONG_TAU1_YR = 100  # the longest slow timescale in the sweeps, so the longest spin-up
-TAU1_COMPARED = (1, 20, 100)  # slow timescales (yr) of forced_response_tau1, levels of slow_timescale_snr
-TAU1_COLORS = ("tab:orange", "k", "tab:blue")
+ABLATION_CMAP = "viridis"  # sequential: these lines are ordered by their level, not categories
 
 
 def gauss_label(system):
@@ -210,28 +211,106 @@ def plot_forcing(ds, out_path, label="", **_):
     save(fig, out_path)
 
 
-def tau1_datasets(cfg):
-    """{tau1_yr: dataset} at the TAU1_COMPARED levels of the slow_timescale_snr sweep (one realization: the forced
-    response does not depend on the noise)."""
+def level_datasets(cfg, study, levels):
+    """{level: dataset} for the given levels of `study`, one realization each.
+
+    One realization is enough: the forced response does not depend on the noise at all, and the data
+    panel shows a single member by design rather than an ensemble.
+    """
     one = replace(cfg, n_realizations=1)
-    return {tau: find_level(one, "slow_timescale_snr", tau)()[0] for tau in TAU1_COMPARED}
+    return {level: find_level(one, study, level)()[0] for level in levels}
 
 
-def plot_forced_response_tau1(out_path, label="", cfg=DEFAULT, **_):
-    """Only the forced responses of the slow_timescale_snr datasets at TAU1_COMPARED (annual means), tall panels."""
-    datasets = tau1_datasets(cfg)
-    fig = plt.figure(figsize=(PAGE_W, TALL_ROW * (M // N_COLS)))
-    axes = latitude_axes(fig)
-    for (tau, ds), color in zip(datasets.items(), TAU1_COLORS):
-        years = annual_years(ds.system)
-        for i, ax in axes.items():
-            ax.plot(years, annual(ds.forced[:, i], axis=-1), color=color, linewidth=1.6,
-                    label=rf"$\tau_1$ = {tau:g} yr ($V^{{(f)}}$ {ds.V_f:.3g})")
-    handles, labels = axes[M - 1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper right", ncol=len(datasets), frameon=False)
-    fig.suptitle(r"Forced response at $\tau_1$ = " + ", ".join(f"{tau:g}" for tau in TAU1_COMPARED)
-                 + " yr (slow_timescale_snr datasets, annual means)" + (f"\n{label}" if label else ""),
-                 x=0.02, ha="left")
+def level_colors(levels, log=True):
+    """(color per level, scalar mappable for the colorbar).
+
+    Log by default: the tau_1 and SNR level sets span decades. The overlap levels are cosines that start at
+    0, which a log norm cannot take and would misrepresent anyway, so those pass log=False.
+    """
+    norm = (LogNorm if log else Normalize)(vmin=min(levels), vmax=max(levels))
+    mappable = cm.ScalarMappable(norm=norm, cmap=ABLATION_CMAP)
+    return [mappable.to_rgba(level) for level in levels], mappable
+
+
+def level_colorbar(fig, ax, mappable, levels, label):
+    """A colorbar ticked at the sweep's own levels, not at decades.
+
+    A log norm otherwise labels the bar 10^0, 4x10^0, ... which names values the sweep never ran; the
+    levels are the only meaningful ticks, and there are few enough of them to print.
+    """
+    bar = fig.colorbar(mappable, ax=ax, label=label, ticks=list(levels))
+    bar.ax.minorticks_off()
+    bar.ax.set_yticklabels([f"{level:.3g}" for level in levels])  # 1/30 is 0.0333, not 0.0333333
+    return bar
+
+
+def plot_forced_response_ablations(out_path, label="", cfg=DEFAULT, **_):
+    """One panel per ablation: the forced response by tau_1, one realization by SNR, w_1's shape by its
+    overlap with the forcing.
+
+    Replaces the 20-panel latitude figure, which spent a page showing what is one curve per level once
+    the pattern is collapsed to a global mean. No two panels show the same quantity, and they cannot:
+    the total_snr sweep leaves the system alone and only rescales the noise budget, so its forced
+    response is identical at every level. What SNR changes is how far that fixed signal sits inside one
+    realization, which is what panel (b) draws.
+
+    Panel (c) is spatial where the first two are time series, because what forcing_overlap ablates is a
+    shape: w_1 rotates along the sphere toward b-hat until the two are the same vector, which is the
+    point at which the forcing drives the slow mode and nothing else. It needs only W, so it rotates the
+    reference system itself rather than simulating a dataset per level as (a) and (b) do -- the same
+    rotate_slow_to_b call the study's own builder makes, so these are its systems.
+    """
+    taus = list(cfg.slow_timescales_yr)
+    snrs = list(cfg.total_snrs)
+    reference = build_reference(cfg)
+    overlaps = list(reference.b_overlaps)  # resolved here, not in cfg, where the field defaults to None
+    tau_data = level_datasets(cfg, "slow_timescale_snr", taus)
+    snr_data = level_datasets(cfg, "total_snr", snrs)
+    tau_colors, tau_mappable = level_colors(taus)
+    snr_colors, snr_mappable = level_colors(snrs)
+    overlap_colors, overlap_mappable = level_colors(overlaps, log=False)
+
+    fig, axes = plt.subplots(1, 3, figsize=(PAGE_W, 4.2))
+
+    for (tau, ds), color in zip(tau_data.items(), tau_colors):
+        axes[0].plot(annual_years(ds.system), annual(global_mean(ds.forced), axis=-1),
+                     color=color, linewidth=1.6)
+    zero_line(axes[0])
+    axes[0].set_title(r"(a) forced response, global mean, by $\tau_1$")
+    axes[0].set_ylabel("forced response (global mean)")
+    level_colorbar(fig, axes[0], tau_mappable, taus, r"$\tau_1$ (yr)")
+
+    forced = [ds.forced for ds in snr_data.values()]
+    # the premise of the panel: total_snr rescales the budget only, so one black curve serves every level
+    assert all(np.allclose(f, forced[0]) for f in forced), "total_snr changed the forced response"
+    for (snr, ds), color in zip(snr_data.items(), snr_colors):
+        axes[1].plot(annual_years(ds.system), annual(global_mean(ds.data[0]), axis=-1),
+                     color=color, linewidth=0.9, alpha=0.85)
+    fixed = next(iter(snr_data.values()))
+    axes[1].plot(annual_years(fixed.system), annual(global_mean(fixed.forced), axis=-1),
+                 color="k", linewidth=2.2, zorder=5, label="forced response (same at every SNR)")
+    zero_line(axes[1])
+    axes[1].set_title("(b) one realization, global mean, by SNR")
+    axes[1].set_ylabel("data (global mean)")
+    axes[1].legend(loc="upper left", fontsize=PANEL_TITLE)
+    level_colorbar(fig, axes[1], snr_mappable, snrs, "SNR")
+
+    # b-hat first and heavy, so the c = 1 level is seen landing on it rather than hiding it
+    axes[2].plot(LAT, reference.system.b, color="k", linewidth=2.4, zorder=1, label=r"$\hat b$")
+    for overlap, color in zip(overlaps, overlap_colors):
+        W, _ = rotate_slow_to_b(reference.system.W, reference.system.b, overlap)
+        axes[2].plot(LAT, W[:, 0], color=color, linewidth=1.6)
+    zero_line(axes[2])
+    axes[2].set_title(r"(c) slow mode $w_1$, by $\cos\angle(w_1,\hat b)$")
+    axes[2].set_ylabel(r"$w_1$")
+    axes[2].legend(loc="lower right", fontsize=PANEL_TITLE)
+    level_colorbar(fig, axes[2], overlap_mappable, overlaps, r"$\cos\angle(w_1,\hat b)$")
+
+    for ax in axes[:2]:
+        ax.set_xlabel("year")
+    axes[2].set_xlabel("latitude (deg)")
+    fig.suptitle(r"The ablations: forced response by $\tau_1$, one realization by SNR, the slow mode's "
+                 r"shape by $\cos\angle(w_1,\hat b)$" + (f"\n{label}" if label else ""))
     save(fig, out_path)
 
 
@@ -255,12 +334,12 @@ def plot_forced_response_shape(ds, out_path, label="", **_):
 
 
 # Each plotter takes (ds, out_path) and whatever of n_shown/label/cfg it needs, ignoring the rest;
-# forced_response_tau1 builds its own datasets, so it does not take ds at all.
+# forced_response_ablations builds its own datasets, so it does not take ds at all.
 DIAGNOSTICS = {
     "modal_overview": plot_modal_overview,
     "ensemble_super_spaghetti": plot_ensemble_super_spaghetti,
     "forcing": plot_forcing,
-    "forced_response_tau1": lambda ds, out_path, **kw: plot_forced_response_tau1(out_path, **kw),
+    "forced_response_ablations": lambda ds, out_path, **kw: plot_forced_response_ablations(out_path, **kw),
     "forced_response_shape": plot_forced_response_shape,
 }
 

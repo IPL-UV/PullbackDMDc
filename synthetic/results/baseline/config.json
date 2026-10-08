@@ -24,7 +24,8 @@
   "pattern_seed": 22,
   "eigenvalue_seed": 20,
   "noise_seed": 0,
-  "history": 1200,
+  "history_decay_times": 30,
+  "history": null,
   "total_snrs": [
     0.03333333333333333,
     0.1,
@@ -51,6 +52,7 @@
     100
   ],
   "mode_overlaps": null,
+  "b_overlaps": null,
   "n_realizations": 100,
   "lag": 1,
   "optlag": 60,

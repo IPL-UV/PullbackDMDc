@@ -22,10 +22,10 @@ from ablation_data import (
 )
 from plot_ablation_diagnostics import annual, lat_label
 from methods import fit_pullback
-from run_ablation_studies import plane_cosines, rms, slow_index
+from run_ablation_studies import centered_rms, plane_cosines, rms, slow_index
 from plot_system_diagnostics import plot_modal_overview
 from plot_style import save, zero_line
-from support import noise_free_white_forcing, oracle_forced, recovery_metrics
+from support import noise_free_white_forcing, recovery_metrics
 
 FIGURES_DIR = pathlib.Path(__file__).resolve().parents[1] / "figures" / "tests"
 
@@ -200,7 +200,7 @@ def check_forced_internal_split(spaghetti_path, convergence_path, modal_path, n_
     counts = [k for k in (4, 16, 64, 256) if k <= n_realizations]
     mean_errors = [rms(ds.data[:k].mean(axis=0) - ds.forced) for k in counts]
     slope = float(np.polyfit(np.log(counts), np.log(mean_errors), 1)[0])
-    rms_forced = rms(ds.forced)
+    rms_forced = centered_rms(ds.forced)  # the same V_f / M the SNR is built from (see centered_rms)
 
     print(f"--- forced/internal split: {n_realizations} realizations, SNR {ds.snr:.3g} ---")
     print(f"  parts vs direct x-space sim  {direct_err:.2e}  (relative)")
@@ -250,10 +250,7 @@ def check_forced_internal_split(spaghetti_path, convergence_path, modal_path, n_
 def check_forced_internal_recovery(spaghetti_path, mse_path, n_realizations=100, zoom_years=25):
     ds = make_dataset(REFERENCE, equal_budget, n_realizations=n_realizations)
     m = recovery_metrics(ds)
-    oracle_err = rms(oracle_forced(ds) - ds.forced) / rms(ds.forced)
-
     print(f"--- forced/internal recovery: starting point, SNR {ds.snr:.3g}, {n_realizations} realizations ---")
-    print(f"  oracle (true A, B; 100-yr history) forced rms error {oracle_err:.2e}")
     for key, name, fmt in (("forced_corr", "corr forced", ".4f"), ("forced_err", "forced rms error", ".2%"),
                            ("internal_err", "internal rms error", ".2%"), ("slow_eig", "slow eigenvalue", ".5f")):
         q25, q50, q75 = np.percentile(m[key], [25, 50, 75])
@@ -295,9 +292,7 @@ def check_forced_internal_recovery(spaghetti_path, mse_path, n_realizations=100,
     axes[0].legend(fontsize=8)
 
     axes[1].hist(m["forced_err"], bins=20)
-    axes[1].axvline(oracle_err, color="0.4", linestyle="--", label="oracle (history truncation)")
     axes[1].set_title("Forced relative rms error")
-    axes[1].legend(fontsize=8)
 
     axes[2].hist(m["forced_corr"], bins=20)
     axes[2].set_title("Forced correlation")
