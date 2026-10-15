@@ -2,7 +2,7 @@
 
     python plot_ablation_run_results.py --runs baseline                # figures/ablations/baseline/
     python plot_ablation_run_results.py --runs baseline slow50         # figures/ablations/compare_baseline_vs_slow50/
-    python plot_ablation_run_results.py --runs baseline --studies total_snr spatial_overlap
+    python plot_ablation_run_results.py --runs baseline --studies total_snr partial_snr_pair
 
 results_sweeps.png is one row per evaluation metric, (a) to (c), and one column per ablation study.
 The columns are DEFAULT_STUDIES; --studies picks any other selection of SWEEP_STUDIES, left to right.
@@ -26,16 +26,15 @@ from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from ablation_data import (DEFAULT_STUDIES, LINEAR_X, PHI, SWEEP_STUDIES, build_reference, global_mean,
-                           record_years)
-from config import RESULTS_DIR, Config, config_diff, from_json
-from plot_ablation_diagnostics import standardized
+from ablations import DEFAULT_STUDIES, LAT, LINEAR_X, STUDIES, make_level
+from config import FIGURES_DIR, RESULTS_DIR, Config, config_diff, from_json
 from plot_style import (COLUMN_W, LEGEND_INCHES, PAGE_W, PANEL_TITLE, ROW_H, legend_rect, level_ticklabels,
                         reserve_legend_strip, save, zero_line)
-from plot_system_diagnostics import reference_dataset
 from utils.params import colors, method_markers
 
-FIGURES_DIR = pathlib.Path(__file__).resolve().parent / "figures" / "ablations"
+FIGURES_DIR = FIGURES_DIR / "ablations"
+# every study the sweep and shape figures can show, with the title its column carries
+SWEEP_STUDIES = {name: study.title for name, study in STUDIES.items() if name != "joint_snr_timescale"}
 
 METHOD_ORDER = ["PullbackDMDc", "LIM", "LIM-opt", "LR"]
 # LIM and LIM-opt fit the same lag-step operator, so their structural scores coincide
@@ -65,7 +64,7 @@ class Run:
     name: str
     cfg: Config
     results: pd.DataFrame
-    modes: Optional[pd.DataFrame] = None  # slow_modes.npz, or None for a run made before it existed
+    modes: pd.DataFrame  # slow_modes.npz
 
     def label(self, base=None):
         diff = config_diff(self.cfg, base.cfg) if base is not None else config_diff(self.cfg)
@@ -77,9 +76,7 @@ class Run:
 
 
 def load_slow_modes(path):
-    """slow_modes.npz as a DataFrame with a `pattern` column of arrays, or None when the run predates it."""
-    if not path.exists():
-        return None
+    """slow_modes.npz as a DataFrame with a `pattern` column of arrays."""
     with np.load(path) as archive:
         patterns = archive["pattern"]
         frame = pd.DataFrame({k: archive[k] for k in archive.files if k != "pattern"})
@@ -150,8 +147,6 @@ def unstable_note(df):
     non-decaying slow mode. Such a fit has no e-folding time at all, so row (b) drops it: where the share
     is large the curve is drawn from few fits, or stops, and this note is what carries the result.
     """
-    if "slow_unstable" not in df:
-        return ""
     shares = [(method, df[df.method == method].slow_unstable.mean()) for method in OPERATOR_METHODS]
     shown = [f"{method} {share:.0%}" for method, share in shares if share > 0.005]
     return "non-decaying dropped: " + ", ".join(shown) if shown else ""
@@ -237,8 +232,6 @@ def row_legend(row_axes, **kwargs):
 def draw_panel(ax, spec, run, df, study, linestyle=None):
     """One run in one panel. linestyle None draws the reference: thin dotted medians, no legend entries."""
     metric, _ = spec.panel(study, run.cfg.lag)
-    if metric not in df:
-        return                               # a legacy run that never scored this metric: leave the row empty
     for method, label in spec.methods(run).items():
         if linestyle is None:
             plot_reference(ax, df, metric, method)
@@ -262,17 +255,15 @@ def default_level(study, cfg):
     rather than as an unanchored curve, and it is the level every other figure of the run describes.
     """
     if study == "total_snr":
-        return 1 / sum(cfg.variances)        # the reference SNR is the variance shares' reciprocal (config.py)
+        return cfg.snr
     if study.startswith("partial_snr_"):
-        return 1.0                           # factor 1 leaves the component at the equal budget
+        return 1.0                           # factor 1 leaves the component at the reference split
     if study.startswith("slow_timescale_"):
-        return cfg.tau1_yr
-    if study == "spatial_overlap":
-        return build_reference(cfg).base_overlap
-    if study == "forcing_overlap":
-        return build_reference(cfg).base_b_overlap
-    if study == "noise_overlap":
-        return 0.0                           # the reference's noisy modes are orthogonal to w_1 (make_W)
+        return cfg.tau1
+    if study == "obs_noise":
+        return cfg.split[4]
+    if study == "forcing_rotation":
+        return cfg.b_rot
     return None
 
 
@@ -417,9 +408,13 @@ def plot_phase_change(reference, variant, path):
     save(fig, path, tight=False, bbox="tight")
 
 
-def forcing_change_datasets(runs):
-    """{run name: dataset} for each run's own config, one realization (the forced response is noise free)."""
-    return {run.name: reference_dataset(replace(run.cfg, n_realizations=1)) for run in runs}
+def forcing_change_ensembles(runs):
+    """{run name: ensemble} for each run's own config, one realization (the forced response is noise free)."""
+    return {run.name: make_level(replace(run.cfg, n_realizations=1)) for run in runs}
+
+
+def standardized(v):
+    return (v - v.mean()) / v.std()
 
 
 def plot_forcing_change(reference, variant, path):
@@ -430,7 +425,7 @@ def plot_forcing_change(reference, variant, path):
     forcing and the forced response share, so LR can fit it directly; whether PullbackDMDc gains or
     loses against that is the question the figure is for, and it cannot be read off the phase diagrams.
     """
-    datasets = forcing_change_datasets([reference, variant])
+    ensembles = forcing_change_ensembles([reference, variant])
     total = {run.name: run.results[run.results.study == "total_snr"] for run in (reference, variant)}
     fig, axes = plt.subplots(1, 3, figsize=(PAGE_W, 3.6))
     # REFERENCE_STYLE already carries a linewidth, so neither style takes one at the call site
@@ -438,10 +433,9 @@ def plot_forcing_change(reference, variant, path):
               variant.name: dict(linestyle="-", color="C0", linewidth=1.6)}
     labels = {reference.name: reference.label(), variant.name: variant.label(reference)}
 
-    for name, ds in datasets.items():
-        record = record_years(ds.system)
-        axes[0].plot(record, ds.y[ds.system.spinup:], label=labels[name], **styles[name])
-        axes[1].plot(record, standardized(global_mean(ds.forced)), **styles[name])
+    for name, ens in ensembles.items():
+        axes[0].plot(ens["years"], ens["y"], label=labels[name], **styles[name])
+        axes[1].plot(ens["years"], standardized(ens["forced"].mean(axis=-1)), **styles[name])
     zero_line(axes[0])
     zero_line(axes[1])
     axes[0].set_title("(a) forcing $y$, centered on the record")
@@ -509,17 +503,14 @@ def plot_slow_mode_shapes(run, path, studies=None):
     is but never how. This says how: whether a degraded fit flattens the pattern, tilts it, or picks up
     a different mode entirely. The residual rather than the pattern, because the fits sit close to the
     truth: drawn as patterns the whole panel is spent on the shape they share and the deviation the
-    figure exists to show is the thin gap between them. Differencing also absorbs the truth's own motion
-    with the level in the two overlap studies -- every level is read against its own $w_1$ -- so one zero
-    line replaces a truth curve per level.
+    figure exists to show is the thin gap between them. Every level is read against its own $w_1$, so one
+    zero line replaces a truth curve per level.
     """
-    if run.modes is None:
-        return []
     studies = mode_shape_studies(run, studies)
     methods = [m for m in OPERATOR_METHODS if m in set(run.modes.method)]
     if not studies or not methods:
         return []
-    lat = np.rad2deg(PHI)
+    lat = LAT
     # COLUMN_W per column and ROW_H per row, the same grid plot_sweeps is on, so the columns of the two
     # figures line up when they are read together; the colorbars go under their column rather than beside
     # it, which would take the width back out of the panel and break that alignment, and the legend strip
@@ -570,9 +561,8 @@ def plot_slow_mode_shapes(run, path, studies=None):
     # include both, where a two-line suptitle would sit on top of the two-line column headings
     fig.suptitle(f"{run.label()}: slow-mode pattern error $\\hat w_1 - w_1$, median over realizations",
                  fontsize=10, y=1.04)
-    fig.text(0.5, -0.04, "each level is differenced against the true $w_1$ of that level, which matters "
-             "when a study moves the truth with the level, as the overlap studies do; grey: zero, an exact "
-             "pattern. "
+    fig.text(0.5, -0.04, "each level is differenced against the true $w_1$ of that level; grey: zero, an "
+             "exact pattern. "
              "Every panel sets its own y scale, so read the shapes within a panel and the numbers, not the "
              "heights, between them. Patterns are unit norm and signed to agree with the truth, so they can "
              "be averaged over realizations. LIM and LIM-opt fit the same lag-step operator, so their modes "

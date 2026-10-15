@@ -2,65 +2,52 @@
 
 import numpy as np
 
-from ablation_data import M, REFERENCE, build_reference, drive_modal, equal_budget, make_dataset
+from ablations import M, N
 from config import DEFAULT, with_overrides
 from methods import fit_pullback
-from run_ablation_studies import centered_rms, rms, slow_index  # noqa: F401  (re-exported)
+from run_ablation_studies import centered_rms, rms, slow_index, true_eigs  # noqa: F401  (re-exported)
+from synthetic_generator import generate_ensemble
 
-SMALL = dict(n_realizations=2)
-
-
-def reference_data(**kwargs):
-    """A dataset on the default reference system at the equal budget."""
-    return make_dataset(REFERENCE, equal_budget, **{"n_realizations": 1, **kwargs})
+# a short spin-up keeps a test ensemble cheap: 5 decay times still leave the start-up transient at e^-5
+CHEAP = with_overrides(DEFAULT, ["spin_up_factor=5", "n_realizations=2"])
 
 
-def record_dataset(cfg, **kwargs):
-    """(reference, dataset) for a config, for the forcing tests that compare y against a model curve."""
-    ref = build_reference(cfg)
-    return ref, make_dataset(ref.system, equal_budget, **{"n_realizations": 1, **kwargs})
-
-
-def overridden(overrides, source="analytic_gauss"):
-    return with_overrides(DEFAULT, [f"forcing_source={source}", *overrides])
-
-
-def assert_unit_b_scale(system):
-    """||y0 (I - A)^-1 B||_F = 1."""
-    gain = np.linalg.solve(np.eye(M) - system.A, system.B)
-    assert abs(abs(system.y0) * np.linalg.norm(gain) - 1) < 1e-9
+def cheap_ensemble(n_members=1, **kwargs):
+    return generate_ensemble(n_members, **{"tau1": DEFAULT.tau1, "spin_up_factor": 5, "rng": 0, **kwargs})
 
 
 def noise_free_white_forcing(n_steps=20000):
-    """(system, forcing, data) with no internal noise and a white forcing: the exactly recoverable case."""
-    s = REFERENCE
+    """(ens, forcing, data, spinup): the reference propagator driven, with no noise, by a white forcing.
+
+    The exactly recoverable case: a white forcing excites every mode, where the smooth forcing of the
+    ensemble leaves the propagator poorly determined.
+    """
+    ens = cheap_ensemble(spin_up_factor=40)  # long enough for the random initial state to decay
     rng = np.random.default_rng(0)
-    y = rng.standard_normal(s.spinup + n_steps)
-    z = drive_modal(s, y, z0=s.W_inv @ rng.standard_normal(M))
-    return s, y, z[s.spinup:] @ s.W.T
+    spinup = len(ens["y_full"]) - N
+    y = rng.standard_normal(spinup + n_steps)
+    x, data = rng.standard_normal(M), np.empty((len(y), M))
+    for t, yt in enumerate(y):
+        x = ens["A"] @ x + ens["B"] * yt
+        data[t] = x
+    return ens, y, data[spinup:], spinup
 
 
-def recovery_metrics(ds):
-    """PullbackDMDc skill per realization.
+def recovery_metrics(ens, lag):
+    """PullbackDMDc skill per member.
 
-    Deliberately independent of run_ablation_studies.score: test_runner_results_match_recovery_diagnostics
+    Deliberately independent of run_ablation_studies.score: test_runner_results_match_recovery_metrics
     cross-checks the two implementations against each other.
     """
-    long_forcings, short_forcings, history = ds.forcings()
+    spinup = len(ens["y_full"]) - N
+    lam1, _ = true_eigs(ens)
     rows = []
-    for data, internal in zip(ds.data, ds.internal):
-        system = ds.system
-        model = fit_pullback(data, long_forcings, short_forcings, history)
+    for data in ens["data"]:
+        model = fit_pullback(data, ens["y_full"][:, None], ens["y"][:, None], spinup, lag=lag)
         forced_est = model.predict()
-        internal_est = data - forced_est
         rows.append(dict(
-            forced_corr=np.corrcoef(forced_est.ravel(), ds.forced.ravel())[0, 1],
-            forced_err=rms(forced_est - ds.forced) / centered_rms(ds.forced),
-            internal_err=rms(internal_est - internal) / centered_rms(internal),
-            mirror=np.abs((forced_est - ds.forced) + (internal_est - internal)).max(),
-            slow_eig=model.eigvals[slow_index(model.eigvals, system.lam1)].real,
-            forced_mse=((forced_est - ds.forced) ** 2).mean(axis=0),
-            internal_mse=((internal_est - internal) ** 2).mean(axis=0),
-            forced_est=forced_est,
+            forced_corr=np.corrcoef(forced_est.ravel(), ens["forced"].ravel())[0, 1],
+            forced_err=rms(forced_est - ens["forced"]) / centered_rms(ens["forced"]),
+            slow_eig=model.eigvals[slow_index(model.eigvals, lam1 ** lag)].real,
         ))
     return {key: np.array([row[key] for row in rows]) for key in rows[0]}

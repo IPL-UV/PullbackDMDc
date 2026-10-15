@@ -12,7 +12,7 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from ablation_data import M
+from ablations import M
 from config import DEFAULT
 from utils.pullback_dmdc import PullbackDMDc
 from utils.lim import LIM

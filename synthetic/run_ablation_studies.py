@@ -1,11 +1,11 @@
 """Fit every method on every ablation dataset and score the forced-response and operator recovery.
 
-    python run_ablation_studies.py                                       # results/baseline/
-    python run_ablation_studies.py --name slow50 --set tau1_yr=50 slow_variance=0.5
-    python run_ablation_studies.py --name lag3 --from-run baseline --set lag=3 --studies total_snr
+    python run_ablation_studies.py --n-jobs 12                           # results/baseline/
+    python run_ablation_studies.py --name slow50 --set tau1=50
+    python run_ablation_studies.py --name lag1 --from-run baseline --set lag=1 --studies total_snr
 
-Each run writes results/<name>/config.json and results/<name>/ablations.csv (one row per study, level,
-realization and method), plus the system diagnostics of its reference system in figures/ablations/<name>/.
+Each run writes results/<name>/config.json, provenance.json, ablations.csv (one row per study, level,
+realization and method) and slow_modes.npz. The data of every level come from ablations.make_level.
 """
 
 import argparse
@@ -16,18 +16,9 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, parallel_backend
 
-from ablation_data import M, N, SPINUP_DECAY_TIMES, decay_time, decay_time_yr, study_levels
+from ablations import M, N, STUDIES, make_level, study_levels
 from config import DEFAULT, RESULTS_DIR, config_diff, load_config, to_json
 from methods import make_methods
-from plot_ablation_run_results import FIGURES_DIR
-from plot_system_diagnostics import plot_diagnostics, reference_dataset
-
-
-# The system diagnostics kept alongside each run. `forcing` and `ensemble_super_spaghetti` describe the
-# forcing and the noise realizations, which are properties of the config rather than of the fits, and they
-# are identical in every run that shares a config -- figures/diagnostics/system/<name>/ is where they belong,
-# and plot_system_diagnostics.py's own main still writes all five there.
-RUN_DIAGNOSTICS = ("modal_overview", "forced_response_ablations", "forced_response_shape")
 
 
 def package_versions():
@@ -47,6 +38,20 @@ def package_versions():
     return versions
 
 
+def decay_time(eig):
+    return -1 / np.log(np.abs(eig))
+
+
+def decay_time_yr(eig):
+    return decay_time(eig) / 12
+
+
+def true_eigs(ens):
+    """(slow, pair) eigenvalues of the true monthly propagator, read off generate_ensemble's Lambda_R."""
+    L = ens["Lambda_R"]
+    return L[0, 0], L[1, 1] + 1j * abs(L[1, 2])
+
+
 def rms(a):
     return np.sqrt((a**2).mean())
 
@@ -55,7 +60,7 @@ def centered_rms(a):
     """RMS of an (N, M) field about its own time mean: sqrt(V / M) with V = sum_i Var_t a_i.
 
     The denominator of a relative error has to be the variance the SNR is built from
-    (ablation_data.forced_variance), or the score is deflated wherever the forced response carries a
+    (generate_ensemble's Vf), or the score is deflated wherever the forced response carries a
     large constant offset: by a factor 2.5 at tau_1 = 100 yr, where it would turn the growing offset
     into an apparent gain in skill. The numerator stays uncentered, so a constant bias in the estimate
     is still penalized.
@@ -137,9 +142,8 @@ def save_slow_modes(modes, path):
     """The fitted slow-mode patterns, one row per (study, level, realization, method), plus the truth.
 
     A file of its own rather than more columns in ablations.csv, because a row here is a vector of M
-    numbers, not a scalar. The truth is stored per level, not once per run: it is the one thing that
-    moves with the level in spatial_overlap and forcing_overlap. Strings go in as fixed-width unicode
-    so the archive reads back without allow_pickle.
+    numbers, not a scalar. The truth is stored per level, so every level is read against its own w1.
+    Strings go in as fixed-width unicode so the archive reads back without allow_pickle.
     """
     frame = pd.DataFrame(modes)
     arrays = {"pattern": np.stack(frame.pop("pattern").to_numpy())}
@@ -150,33 +154,35 @@ def save_slow_modes(modes, path):
     np.savez_compressed(path, **arrays)
 
 
-def score(ds, forced_est, A=None, lag=1):
-    """A is the fitted propagator over `lag` steps, so its eigenvalues are compared with the true ones ** lag."""
+def score(ens, forced_est, A=None, lag=1):
+    """ens is generate_ensemble's dict, the truth. A is the fitted propagator over `lag` steps, so its
+    eigenvalues are compared with the true ones ** lag."""
+    forced, W = ens["forced"], ens["W"]
+    lam1, pair_eig = true_eigs(ens)
     row = dict(
-        forced_corr=np.corrcoef(forced_est.ravel(), ds.forced.ravel())[0, 1],
-        forced_rel_rmse=rms(forced_est - ds.forced) / centered_rms(ds.forced),
+        forced_corr=np.corrcoef(forced_est.ravel(), forced.ravel())[0, 1],
+        forced_rel_rmse=rms(forced_est - forced) / centered_rms(forced),
         slow_eig_err=np.nan, slow_tau_yr=np.nan, slow_tau_rel_err=np.nan, slow_tau_log_ratio=np.nan,
         slow_unstable=np.nan, slow_corr=np.nan, slow_angle=np.nan, pair_corr=np.nan, pair_angle=np.nan,
     )
     if A is None:
         return row
     eigvals, eigvecs = np.linalg.eig(A)
-    lam1 = ds.system.lam1 ** lag
-    pair = pair_subspace(eigvals, eigvecs, ds.system.eigvals[1] ** lag, ds.system.W[:, 1:3])
+    pair = pair_subspace(eigvals, eigvecs, pair_eig ** lag, W[:, 1:3])
     if pair is not None:
         row["pair_corr"], row["pair_angle"] = subspace_corr(*pair), subspace_angle(*pair)
     if not len(real_eigs(eigvals)):
         return row
-    index = slow_index(eigvals, lam1)
+    index = slow_index(eigvals, lam1 ** lag)
     lam_hat = eigvals[index].real
-    row["slow_eig_err"] = np.abs(eigvals[index] - lam1)
-    slow = slow_subspace(eigvecs, index, ds.system.W[:, 0])
+    row["slow_eig_err"] = np.abs(eigvals[index] - lam1 ** lag)
+    slow = slow_subspace(eigvecs, index, W[:, 0])
     row["slow_corr"], row["slow_angle"] = subspace_corr(*slow), subspace_angle(*slow)
     # A fit with |lambda| >= 1 does not decay, so it has no decay time: count it instead of letting a
     # negative tau pass as just another large error. lambda = 0 (tau = 0) is the same degenerate case.
     row["slow_unstable"] = float(np.abs(lam_hat) >= 1)
     if 0 < np.abs(lam_hat) < 1:
-        tau, tau1 = lag * decay_time(lam_hat), decay_time(ds.system.lam1)
+        tau, tau1 = lag * decay_time(lam_hat), decay_time(lam1)
         # the figure plots the estimate itself against the true tau_1, so it is also reported as it is,
         # in years; lag * decay_time(lambda_hat) is the estimate of the one-step decay time, so the
         # column does not move when the lag does
@@ -188,22 +194,25 @@ def score(ds, forced_est, A=None, lag=1):
     return row
 
 
-def run_level(study, make, cfg=DEFAULT):
+def run_level(study, level, cfg=DEFAULT):
     """(scored rows, slow-mode patterns) for one level: the CSV rows and the vectors save_slow_modes writes."""
-    (ds,) = make()
-    meta = dict(study=study, param_name=ds.param_name, param_value=ds.param_value,
-                snr=ds.snr, tau1_yr=decay_time_yr(ds.system.lam1))
+    ens = make_level(cfg, study, level)
+    lam1, _ = true_eigs(ens)
+    meta = dict(study=study, param_name=STUDIES[study].param_name, param_value=STUDIES[study].param_value(level),
+                snr=ens["snr"], tau1_yr=decay_time_yr(lam1))
     mode_meta = {k: meta[k] for k in ("study", "param_name", "param_value", "tau1_yr")}
-    w1 = ds.system.W[:, 0]
+    w1 = ens["W"][:, 0]
     rows = []
     modes = [dict(mode_meta, realization=-1, method="truth", pattern=w1 / np.linalg.norm(w1))]
-    long_forcings, short_forcings, spinup = ds.forcings()
+    # the methods see the whole forcing, back to where the truth starts from zero
+    long_forcings, short_forcings = ens["y_full"][:, None], ens["y"][:, None]
+    spinup = len(ens["y_full"]) - N
     methods = make_methods(cfg)
-    for r, data in enumerate(ds.data):
+    for r, data in enumerate(ens["data"]):
         for name, fit in methods.items():
             forced_est, A = fit(data, long_forcings, short_forcings, spinup)
-            rows.append(dict(meta, realization=r, method=name, **score(ds, forced_est, A, lag=cfg.lag)))
-            pattern = fitted_slow_mode(A, ds.system.lam1 ** cfg.lag, w1)
+            rows.append(dict(meta, realization=r, method=name, **score(ens, forced_est, A, lag=cfg.lag)))
+            pattern = fitted_slow_mode(A, lam1 ** cfg.lag, w1)
             if pattern is not None:
                 modes.append(dict(mode_meta, realization=r, method=name, pattern=pattern))
     return rows, modes
@@ -219,13 +228,13 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args)
-    levels = [(s, make) for s, _, make in study_levels(cfg) if not args.studies or s in args.studies]
+    levels = [(s, level) for s, level in study_levels(cfg) if not args.studies or s in args.studies]
     if not levels:
-        parser.error(f"no levels selected; studies are {sorted({s for s, _, _ in study_levels(cfg)})}")
+        parser.error(f"no levels selected; studies are {', '.join(STUDIES)}")
     print(f"run {args.name!r}: {len(levels)} levels, {cfg.n_realizations} realizations, "
           f"config: {config_diff(cfg) or 'default'}")
     with parallel_backend("loky", inner_max_num_threads=1):
-        results = Parallel(n_jobs=args.n_jobs, verbose=5)(delayed(run_level)(s, make, cfg) for s, make in levels)
+        results = Parallel(n_jobs=args.n_jobs, verbose=5)(delayed(run_level)(s, level, cfg) for s, level in levels)
 
     out_dir = RESULTS_DIR / args.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -240,17 +249,16 @@ def main():
     # is the part config.json cannot carry: the draws come from numpy's generator stream and the fits
     # from LAPACK, so a run is reproducible given the same config AND the same environment.
     (out_dir / "provenance.json").write_text(json.dumps(
-        {"record_months": N, "state_dim": M, "b_scaling": "||y0 (I - A)^-1 B||_F = 1",
-         "spinup_decay_times": SPINUP_DECAY_TIMES,
+        {"generator": "synthetic_generator.generate_ensemble", "record_months": N, "state_dim": M,
+         "b_scaling": "||y0 (I - A)^-1 B|| = 1",
+         "data": "forced + internal + measurement noise, each centered over the record",
          "forced_rel_rmse": "rms(est - true) / centered_rms(true), denominator = sqrt(V_f / M)",
-         "seeds": {name: getattr(cfg, name) for name in ("pattern_seed", "eigenvalue_seed", "noise_seed")},
+         "seeds": {name: getattr(cfg, name) for name in ("w_seed", "eig_seed", "noise_seed")},
          "versions": package_versions()},
         indent=2) + "\n")
     pd.DataFrame([row for rows, _ in results for row in rows]).to_csv(out_dir / "ablations.csv", index=False)
     save_slow_modes([mode for _, modes in results for mode in modes], out_dir / "slow_modes.npz")
     print(f"saved {out_dir}/config.json, provenance.json, ablations.csv, slow_modes.npz")
-    plot_diagnostics(reference_dataset(cfg), FIGURES_DIR / args.name, RUN_DIAGNOSTICS,
-                     label=config_diff(cfg), cfg=cfg)
 
 
 if __name__ == "__main__":

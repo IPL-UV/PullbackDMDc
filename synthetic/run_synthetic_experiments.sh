@@ -1,9 +1,7 @@
 #!/bin/bash
 # Regenerate every synthetic ablation run and every figure.
-#   results/<run>/{ablations.csv,config.json,provenance.json}
-#   figures/ablations/<run>/, figures/diagnostics/{data,system}/
-# results/b_unscaled/ is deliberately not regenerated: it is the pre-B-scaling
-# calibration, kept for comparison, and current code cannot reproduce it.
+#   results/<run>/{ablations.csv,config.json,provenance.json,slow_modes.npz}
+#   figures/ablations/<run>/, figures/generator/<config>/
 set -eo pipefail
 
 # conda's deactivate hooks reference unset vars, so -u only goes on after activation
@@ -14,15 +12,13 @@ export MPLBACKEND=Agg
 cd "$(dirname "$(readlink -f "$0")")"
 
 echo "=== ablation runs ==="
-python run_ablation_studies.py --name baseline
-python run_ablation_studies.py --name dip1 --set gauss_dip_amp=1
+python run_ablation_studies.py --name baseline --n-jobs 12
+python run_ablation_studies.py --name dip1 --set depth=1 --n-jobs 12
 
 echo "=== run figures ==="
 python plot_ablation_run_results.py --runs baseline
 python plot_ablation_run_results.py --runs baseline dip1
 
-echo "=== diagnostics ==="
-python plot_ablation_diagnostics.py
-python plot_system_diagnostics.py
-python plot_system_diagnostics.py --study slow_timescale_snr --level 100
-python plot_forcing_comparison.py
+echo "=== generator diagnostics ==="
+python plot_generator_diagnostics.py
+python plot_generator_diagnostics.py --set depth=1

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Synthetic test suite: the unit tests, then the end-to-end system checks.
+# Synthetic test suite.
 # Arguments are passed to run_tests.py (e.g. --only forcing, --list).
 set -eo pipefail
 
@@ -11,7 +11,3 @@ export MPLBACKEND=Agg      # the plot tests render headlessly
 cd "$(dirname "$(readlink -f "$0")")"
 
 python run_tests.py "$@"
-
-echo
-echo "=== tests/test_synthetic_pipeline.py -> figures/tests/ ==="
-python tests/test_synthetic_pipeline.py

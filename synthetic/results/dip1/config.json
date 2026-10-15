@@ -1,29 +1,22 @@
 {
-  "tau1_yr": 20,
-  "tau_p_yr": 2,
-  "period_p_yr": 4,
-  "complement_eig_range": [
-    0.0,
+  "tau1": 20,
+  "split": [
+    1,
+    1,
+    1,
+    0.9,
     0.1
   ],
-  "slow_variance": 1.0,
-  "pair_variance": 1.0,
-  "complement_variance": 1.0,
-  "forcing_source": "analytic_gauss",
-  "forcing_file": "data_preparation/AR6_ERF_1750-2019.csv",
-  "forcing_column": "co2",
-  "record_end_year": 2014,
-  "forcing_efold_yr": 60,
-  "gauss_efold_yr": 65,
-  "gauss_bump_amp": 0,
-  "gauss_bump_year": 1920,
-  "gauss_bump_width_yr": 20,
-  "gauss_dip_amp": 1,
-  "gauss_dip_year": 1965,
-  "gauss_dip_width_yr": 15,
-  "pattern_seed": 22,
-  "eigenvalue_seed": 20,
+  "b_rot": 0.0,
+  "depth": 1,
+  "spin_up_factor": 100,
+  "w_seed": 22,
+  "eig_seed": 20,
+  "tau_pair": 1.5,
+  "period_pair": 4.0,
+  "lam_noise_max": 0.1,
   "noise_seed": 0,
+  "n_realizations": 100,
   "total_snrs": [
     0.03333333333333333,
     0.1,
@@ -49,18 +42,22 @@
     50,
     100
   ],
-  "mode_overlaps": null,
-  "b_overlaps": null,
-  "noise_overlaps": [
+  "obs_noise_shares": [
+    0.1,
+    0.2,
+    0.5,
+    1,
+    2,
+    3
+  ],
+  "b_rots": [
     0,
     0.25,
     0.5,
     0.75,
-    0.9,
-    0.95
+    1
   ],
-  "n_realizations": 100,
-  "lag": 1,
+  "lag": 3,
   "optlag": 60,
   "methods": [
     "PullbackDMDc",

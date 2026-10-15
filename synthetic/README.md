@@ -1,613 +1,94 @@
 # Synthetic experiments
 
-A 20-mode linear system — one slow mode, one oscillating pair, 17 complement modes — driven by a forcing shaped
-after the AR6 CO₂ ERF. Four estimators (`PullbackDMDc`, `LIM`, `LIM-opt`, `LR`) are fitted to 100 noise
-realizations at every level of every ablation study, and scored on how well they recover the forced response and
-the slow mode. [Data generation](#data-generation) at the end of this file is the full specification of the system.
+A 20-latitude linear system with a slow mode, a fast oscillating (ENSO-like) pair and 17 noise modes, driven by a
+CO₂-like forcing and observed with measurement noise. Four estimators (`PullbackDMDc`, `LIM`, `LIM-opt`, `LR`)
+are fitted to every member of an ensemble, at every level of every ablation study. Each is scored on how well
+it recovers the forced response and the slow mode.
 
-## Getting started
+The system is defined in **`synthetic_generator.py`**, written by Andrei Gavrilov. Its docstring is the
+specification. Everything else in this folder is a thin layer on top of it. Please keep his file in his style,
+and put new logic in the other files.
 
-### What this package does
-
-One synthetic climate-like system, four estimators, one question: **when can each method recover the forced
-response?** The system is a 20-mode linear propagator whose slow mode is the hard part — it has the longest
-memory, carries almost all of the forced variance, and is the mode a 165-year record struggles to pin down.
-
-An *ablation study* bends one property of that system across a range of levels (`levels`), regenerates the data
-at each level, refits all four methods on 100 noise realizations, and scores them. `ablations.csv` is one row
-per (study, level, realization, method); the figures are summaries of it.
-
-### Run it
+## Run it
 
 ```bash
-./run_synthetic_experiments.sh   # every ablation run and every figure (~2 min; the fits dominate)
-./run_synthetic_tests.sh         # unit tests, then the end-to-end system checks
-./run_synthetic_tests.sh --only forcing   # only the matching unit tests, then the system checks
-python run_tests.py --list       # just list the unit tests
+./run_synthetic_experiments.sh   # both ablation runs and every figure
+./run_synthetic_tests.sh         # the unit tests (run_tests.py; --only <substring>, --list)
 ```
 
-Arguments to `run_synthetic_tests.sh` reach `run_tests.py` only, and the system checks run after it either
-way, so listing is done with `run_tests.py` directly.
-
-Both drivers activate the `dmdc_variants` conda env, `cd` into `synthetic/`, and export `OMP_NUM_THREADS=1`
-(the per-step simulation loop is BLAS-thread bound — about 50× less CPU time on the cluster nodes) and
-`MPLBACKEND=Agg`. Run them, rather than the scripts directly, unless you want one specific figure.
-
-Everything runs from `synthetic/`. The folder is not a package: scripts are run from inside it.
-
-### Change a parameter and compare
-
-Every tunable value is a field of `Config` (`config.py`); `--set KEY=VALUE` overrides any of them, and `--name`
-puts the run in its own directory so nothing existing is overwritten. Values are parsed with
-`ast.literal_eval`, so lists and tuples work: `--set slow_timescales_yr=[5,20,80]`.
+The drivers activate the `dmdc_variants` env, `cd` into `synthetic/` and export `OMP_NUM_THREADS=1` (the per-step
+simulation loop is BLAS-thread bound) and `MPLBACKEND=Agg`. Scripts are run from inside `synthetic/`. Use
+`--n-jobs 12` for ablation runs on the shared node.
 
 ```bash
-python run_ablation_studies.py --name slow50 --set tau1_yr=50          # a run with a 50-yr slow mode
-python plot_ablation_run_results.py --runs baseline slow50             # overlay it on the baseline
+python plot_generator_diagnostics.py                                    # his three figures, reference system
+python plot_generator_diagnostics.py --study obs_noise --level 1       # ... at any ablation level
+python run_ablation_studies.py --name slow50 --set tau1=50 --n-jobs 12  # a run with a 50-yr slow mode
+python plot_ablation_run_results.py --runs baseline slow50              # overlaid on the baseline
 ```
 
-The two-run form writes `figures/ablations/compare_baseline_vs_slow50/`, drawing the **first** run as a thin
-dotted reference under the second's solid lines. `--from-run NAME` starts from a saved run's `config.json`
-instead of the defaults, so `--from-run slow50 --set lag=3` varies one thing at a time.
+`--set KEY=VALUE` overrides any `Config` field. Values are Python literals, e.g. `--set "split=(1, 1, 1, 0.9, 0.5)"`.
+`--from-run NAME` starts from a saved run's `config.json` instead of the defaults.
 
-The `Config` fields are grouped by what they control: mode timescales, the internal variance budget, the
-forcing's shape in time, the seeds, the sweep levels, and the methods.
-[Every `Config` field](#every-config-field) tabulates all 34 with their defaults and the symbol each one
-carries in the mathematics.
+## Files
 
-### What the figures show
-
-| figure | read it as |
+| file | what it is |
 |---|---|
-| `results_sweeps.png` | the headline. Three metric rows — (a) forced relative RMSE, (b) fitted $\hat\tau_1$ against the true $\tau_1$, (c) mode-shape correlation — against four studies, one per column. Lines are medians over realizations, bands are the interquartile range. |
-| `results_slow_mode_shapes_<run>.png` | *where* a fitted pattern is wrong, as $\hat w_1-w_1$ against latitude. Same columns as `results_sweeps.png`, so the two stack. |
-| `forced_response_ablations.png` | what each ablation does to the *data*, one column per study. Same columns again, so it stacks on top of both: what the ablation changes here, what it costs each method below. |
-| `results_phase_snr_timescale_<run>.png` | the two axes that matter crossed: SNR against $\tau_1$, one panel per method. |
-| `results_phase_change.png`, `results_forcing_change.png` | written only when exactly two runs are plotted: the phase diagram's difference, and a forcing-shape comparison. |
+| `synthetic_generator.py` | **his**: `make_setup` (W, B, forcing), `generate_ensemble` (the ensemble dict), `fit_pullback_ensemble` |
+| `plot_generator_diagnostics.py` | **his** plots (`plot_setup`, `plot_ensemble_diagnostics`, `plot_pullback_results`) and a CLI → `figures/generator/<config>/` |
+| `config.py` | `Config`: the system fields are `generate_ensemble`'s arguments under the same names, plus seeds, sweep levels and methods |
+| `ablations.py` | `STUDIES`: how each study bends the reference; `make_level(cfg, study, level)` returns `generate_ensemble`'s dict |
+| `methods.py` | the four estimators, fitted one member at a time on identity EOFs |
+| `run_ablation_studies.py` | fits and scores every level → `results/<run>/` |
+| `plot_ablation_run_results.py` | sweep, phase-diagram, slow-mode-shape and forcing-change figures → `figures/ablations/<run>/` |
+| `plot_style.py` | shared matplotlib style of the results figures |
 
-![one row of four panels - a noise realization by SNR, the forced response by slow timescale, a noise realization by the slow mode's variance factor, and a noisy mode tilting toward the slow mode by their overlap - one column per ablation study](figures/ablations/baseline/forced_response_ablations.png)
+## Reference system (`Config` defaults)
 
-![three rows of metrics - forced relative RMSE, fitted slow-mode decay time against the truth, and mode-shape correlation - against four ablation studies, one per column, with four methods per panel](figures/ablations/baseline/results_sweeps.png)
+These are the defaults of his `__main__` block:
+- `tau1=20` yr;
+- `split=(1, 1, 1, 0.9, 0.1)`, which gives the variance shares of the forced response, slow mode, fast pair,
+  noise modes and measurement noise, so SNR = 1/3;
+- `b_rot=0` (flat forcing pattern B), `depth=0.25`, forcing amplitude `a = 2`;
+- `spin_up_factor=100` decay times;
+- `tau_pair=1.5` yr and `period_pair=4` yr;
+- 100 members, fitted at `lag=3`.
 
-![forced relative RMSE over the SNR by tau-1 plane, one shaded and contoured panel per method](figures/ablations/baseline/results_phase_snr_timescale_baseline.png)
+## Ablation studies
 
-**Which axes actually move.** Of the nine one-dimensional studies, only two move every method's scores: the
-**slow mode's SNR** and **$\tau_1$**. `total_snr` and `partial_snr_slow` trace one curve (the former scales
-every mode's noise, the latter only the slow mode's — and the fast modes' SNR turns out not to matter over a
-900× range), while `partial_snr_pair`, `partial_snr_complement`, `spatial_overlap` and `forcing_overlap` leave
-rows (b) and (c) flat and move row (a) by 0.001–0.020 for `PullbackDMDc`, `LIM` and `LR`, against a sampling
-error of about ±0.03 on the median. `LIM-opt` is the exception: its forced relative RMSE moves far more than
-that in the two geometry studies — monotonically 0.95 → 0.74 along `spatial_overlap`, and 0.87 → 0.92 → 0.76
-along `forcing_overlap` — and by 0.05 over the pair and complement SNRs, so those two axes are not flat for
-it. The four are still controls, not dead weight: the flat pair/complement columns are what establish that it
-is the *slow* mode's SNR doing the work.
-
-**The noise's pattern does not matter; its timescale does.** `noise_overlap`, the fourth column, tilts all 17
-fast noise modes toward the slow mode's pattern until 90% of their variance lands on it ($c=0.95$), which
-raises the noise along $w_1$ by $1.8\times$ at a fixed SNR. `PullbackDMDc`, `LIM` and `LR` do not notice: row
-(a) moves by at most 0.008 in `baseline` and `dip1` alike, and row (b) by under 0.2%. Row (c) improves
-slightly, $0.9990\to0.9993$ for `PullbackDMDc`. A full-rank propagator separates the slow mode from the
-noise by their timescales, 20 years against under half a month, so making them look alike in space costs it
-nothing. `LIM-opt` is again the exception, and again not monotone: 0.90 → 0.75 → 1.03 across the sweep
-(0.92 → 0.76 → 1.06 in `dip1`). Its forced estimate is the data projected onto the leading singular pair of the
-60-month propagator, in PCs whitened by the data's covariance. The tilt reshapes that covariance, and with it
-the one pattern the estimate keeps.
-
-### Reproducibility
-
-A run is a pure function of its `config.json`: two runs of the same config produce byte-identical
-`ablations.csv`. The three seeds (`pattern_seed`, `eigenvalue_seed`, `noise_seed`) and the package versions are
-recorded in `provenance.json`, and `tests/test_reproducibility.py` pins the seeded draws so an RNG-stream change
-cannot pass silently. One caveat: `--n-jobs 1` makes joblib fall back to a sequential backend that does not
-apply `inner_max_num_threads=1`, so a serial run uses multi-threaded BLAS and can differ from a parallel run in
-the last bits. Compare like with like.
-
-## Where the results are
-
-Every output path, and the command that writes it:
-
-| output | written by |
-|---|---|
-| `results/<run>/ablations.csv`, `config.json`, `provenance.json` | `run_ablation_studies.py --name <run>` |
-| `figures/ablations/<run>/results_*.png` | `plot_ablation_run_results.py --runs <run>` |
-| `figures/ablations/compare_<a>_vs_<b>/results_*.png` | `plot_ablation_run_results.py --runs <a> <b>` |
-| `figures/ablations/<run>/` — 3 system diagnostics | `run_ablation_studies.py` (its closing `plot_diagnostics` call) |
-| `figures/diagnostics/data/` — 10 dataset diagnostics | `plot_ablation_diagnostics.py` |
-| `figures/diagnostics/data/compare_forcings.png` | `plot_forcing_comparison.py` |
-| `figures/diagnostics/system/<name>/` | `plot_system_diagnostics.py` |
-| `figures/tests/` — 8 system checks | `tests/test_synthetic_pipeline.py` |
-| `figures/reference/co2_zonal_forcing.png` | **nothing — this is an input**, the image `CO2_ZONAL_FORCING` in `system_patterns.py` was digitized from |
-
-The headline figures are in `figures/ablations/`:
-
-| figure | what it shows |
-|---|---|
-| `results_sweeps.png` | the three metrics (a)-(c) as rows, one ablation study per column, median and band over realizations, one line per method |
-| `forced_response_ablations.png` | the same columns, one row: what each ablation does to the data before any method sees it (a system diagnostic, written by `plot_system_diagnostics.py`) |
-| `results_phase_snr_timescale_<run>.png` | the `joint_snr_timescale` study as a phase diagram: SNR against $\tau_1$, one panel per method, shaded by the forced relative RMSE with black contours labelled at `RMSE_LEVELS` |
-| `results_phase_change.png` | the same phase diagram, later run minus reference (written only when exactly two runs are plotted) |
-| `results_slow_mode_shapes_<run>.png` | the fitted slow mode's *departure from the truth*, $\hat w_1-w_1$, against latitude, one line per level coloured by it, grey at zero; one row per operator method, one column per study |
-| `results_forcing_change.png` | two runs whose forcing differs: the forcings, their forced responses (standardized), and `PullbackDMDc` against `LR` on the `total_snr` sweep (written only when exactly two runs are plotted) |
-
-The metric rows are fixed (`ROW_SPECS` in `plot_ablation_run_results.py`): (a) forced relative RMSE,
-(b) slow-mode decay time $\hat\tau_1$ in years against the true $\tau_1$ (dashed), (c) mode shape correlation.
-The columns are `DEFAULT_STUDIES` — `total_snr`, `slow_timescale_modal_variance`, `partial_snr_slow`,
-`noise_overlap`: the three axes the scores actually move along, and the one that asks whether the methods
-tell the slow mode from the noise by its timescale or by its pattern. The other five studies are still run and still scored into
-`ablations.csv`, they are simply not default columns, and `--studies` selects any subset of `SWEEP_STUDIES`;
-`--studies partial_snr_pair` is the only way row (c)'s pair-plane variant is drawn. Every column
-carries a grey vertical line at its default level (`default_level`), the starting point the whole run is
-built on, so a curve reads as a departure from the default rather than as an unanchored sweep. With several
-runs the line is the *reference* run's default.
-
-`results_sweeps.png`, `results_slow_mode_shapes_<run>.png` and `forced_response_ablations.png` are laid out
-on one grid — `COLUMN_W`, `ROW_H` and `LEGEND_INCHES` in `plot_style.py` — so the three stack and read column
-by column. All three reserve the legend strip at the right, including the two that have no legend to put
-there: the strip is what keeps their columns at the same pitch once `bbox="tight"` has cropped each figure.
-
-The phase figures score one quantity, the forced relative RMSE: the shading and the labelled black contours
-are the same levels, so a panel is its own key. The levels are absolute, so one contour means the same error
-in every panel and panels from different runs can be read against each other. A floor set by the finite
-forcing window is folded into them, but there is none: the methods see the whole series, so a contour scales
-with $\tau_1$, so a contour is the method's own error and nothing else.
-
-Row (a) is $\operatorname{rms}(\hat x^{(f)}-x^{(f)})/\operatorname{rms}_c(x^{(f)})$ (`score`, `centered_rms` in
-`run_ablation_studies.py`). The **denominator is centered over time**, $\operatorname{rms}_c(x^{(f)})=\sqrt{V^{(f)}/M}$,
-so it is the same $V^{(f)}$ the SNR is built from; the **numerator is not**, so a constant offset in the estimate is
-still charged to it. An uncentered denominator would instead carry the forced response's own offset, which grows with
-$\tau_1$ and would deflate the score by $1.11$ at $\tau_1=20$ yr and $2.53$ at $100$ yr — turning a growing offset
-into an apparent gain in skill.
-
-Row (b) plots the estimate itself, so a curve above the dashed truth is too slow and one below it too fast. A fit
-whose slow eigenvalue does not decay has no decay time at all: it is dropped and its share is printed above the
-panels (`unstable_note`). Row (c) is the cosine of the largest principal angle between the fitted mode's span and
-the true one (`subspace_corr` in `run_ablation_studies.py`), so 1 is exact recovery of the pattern up to sign and
-scale; `PAIR_STUDIES` score the plane of the oscillating pair, every other study the slow mode, and each panel is
-annotated with the one it scores.
-
-The 3 system diagnostics that accompany each run — `modal_overview`, `forced_response_ablations`,
-`forced_response_shape` (`RUN_DIAGNOSTICS` in `run_ablation_studies.py`) — show the *data*, not the fits.
-`forcing` and `ensemble_super_spaghetti` are not among them: they describe the forcing and the noise
-realizations, which follow from the config alone and are therefore identical in every run that shares one.
-`plot_system_diagnostics.py` still writes all five into `figures/diagnostics/system/<name>/`.
-
-### Figure directory names
-
-- `figures/ablations/`: one run goes to `<run>`, several to `compare_<a>_vs_<b>[_vs_...]`. With several runs
-  the first is the reference, drawn as thin dotted medians under the others.
-- `figures/diagnostics/system/<name>/`: `<name>` is `--name` if given, else `--from-run`, else `config.slug(cfg)`
-  — `default` when the config is the default, otherwise a sanitized `config_diff` such as `n_realizations=10`.
-  Using `--study/--level` without `--name` appends `__<study>=<level>`, e.g. `default__slow_timescale_snr=100`.
-- `figures/diagnostics/data/compare_forcings.png` gains a `__<slug>` suffix under a non-default config, so the
-  default figure is never overwritten.
-
-### The runs that exist
-
-| run | config | note |
+| study | levels | what changes (`generate_ensemble` argument) |
 |---|---|---|
-| `baseline` | the default config | the reference for every comparison |
-| `dip1` | `--set gauss_dip_amp=1` | a much deeper mid-century dip in the forcing |
-| `b_unscaled` | pre-$B$-scaling calibration | **not regenerated**: current code cannot reproduce it, and its CSV uses the legacy schema (no `slow_tau_yr`, `slow_tau_log_ratio`, `slow_unstable`, `slow_corr`, `slow_angle`, `pair_corr`), so rows (b) and (c) are skipped for it. Its `forced_rel_rmse` also uses the old *uncentered* denominator, so row (a) is not comparable with a current run either |
-
-### `ablations.csv`
-
-One row per (study, level, realization, method):
-
-```
-study, param_name, param_value, snr, tau1_yr, realization, method,
-forced_corr, forced_rel_rmse, slow_eig_err, slow_tau_yr, slow_tau_rel_err, slow_tau_log_ratio,
-slow_unstable, slow_corr, slow_angle, pair_corr, pair_angle
-```
-
-`baseline` and `dip1` each hold 104 levels x 100 realizations x 4 methods = 41 600 rows. There is no oracle
-row: the methods see the forcing back to where the truth starts, so the true $A, B$ reproduce the forced
-response exactly and the floor it used to mark is gone by construction.
-
-### `slow_modes.npz`
-
-Beside `ablations.csv`, each run writes the fitted slow mode's *pattern*, which is a vector and so does not
-belong in the scalar table. Arrays `study`, `param_name`, `param_value`, `tau1_yr`, `realization`, `method`
-and `pattern` $(n, M)$, one row per (level, realization, method) whose fit has a propagator, plus one
-`method = "truth"` row per level carrying that level's $w_1$ — the truth is stored per level because
-`spatial_overlap` and `forcing_overlap` move it. Patterns are unit norm and signed to agree with the truth
-(`fitted_slow_mode`), so they can be averaged across realizations; the eigenvector's own sign and scale are
-arbitrary. `results_slow_mode_shapes_<run>.png` draws each fit's *difference* from the `truth` row of its
-own level, so the overlap studies — where the truth moves — are read against the same zero line as the rest.
-A run made before this file existed simply has no figure.
-
-Each run also writes `provenance.json` — the structural values that are *not* in the config
-(`record_months`, `state_dim`, `b_scaling`, `spinup_decay_times`, `forced_rel_rmse`) — so runs made across a
-structural or scoring change cannot be compared by mistake. A run whose `provenance.json` lacks `forced_rel_rmse`
-predates the centered denominator (see Figures) and its row (a) is not comparable with a current run.
-
-## Scripts
-
-| script | what it does |
-|---|---|
-| `run_ablation_studies.py` | the experiment runner: fits every method on every level of every study and scores them. `--name`, `--set KEY=VALUE ...`, `--from-run`, `--studies`, `--n-jobs` (default -1, parallel over levels) |
-| `plot_ablation_run_results.py` | figures from existing `results/<run>/`. `--runs NAME [NAME ...]`, `--studies` |
-| `plot_system_diagnostics.py` | diagnostics of the system and its data, for any config or sweep level. `--set`, `--from-run`, `--study`/`--level` (together), `--plots`, `--studies` (the `forced_response_ablations` columns), `--n-shown`, `--name` |
-| `plot_ablation_diagnostics.py` | calibration and per-study dataset diagnostics. No options |
-| `plot_forcing_comparison.py` | the true AR6 forcing against the two analytic models, all centered on the record; prints an RMSE table. `--set`, `--from-run` |
-| `run_tests.py` | the unit tests, without pytest. `--only SUBSTRING`, `--list` |
-
-## Modules
-
-| module | contents |
-|---|---|
-| `config.py` | `Config`, the frozen dataclass holding every tunable value, plus `with_overrides`, `slug`, `load_config`, JSON round-trip |
-| `system_patterns.py` | latitude grid, the three structured patterns, the zonal-mean CO₂ forcing pattern, and `make_W` |
-| `ablation_data.py` | the core: `System`, the forcing models, simulation, the SNR budget, `SyntheticDataset`, and the `STUDIES` table of sweeps, with the `SWEEP_STUDIES` titles, `DEFAULT_STUDIES` columns and `LINEAR_X` level axes every study figure reads |
-| `methods.py` | thin wrappers fitting the four estimators from `utils/` on one realization |
-| `plot_style.py` | shared matplotlib style, `save`, `zero_line`, `record_span`, the forcing panels, and the `COLUMN_W`/`ROW_H`/`LEGEND_INCHES` grid the study-column figures share |
-
-## Configuration
-
-`config.py`'s `Config` is the single source of truth; `M = 20` and `N = 1980` months are structural and live in
-`ablation_data.py`. Override anything on the command line:
-
-```bash
-python run_ablation_studies.py --name slow50 --set tau1_yr=50 slow_variance=0.5
-python run_ablation_studies.py --name lag3 --from-run baseline --set lag=3 --studies total_snr
-python plot_system_diagnostics.py --study slow_timescale_snr --level 100
-```
-
-`--from-run <name>` loads `results/<name>/config.json` as the starting point, so any `--set` is a delta on that run.
-
-### Every `Config` field
-
-The six groups below are the ones `config.py` is written in. The **symbol** column is the symbol the field
-carries in [Data generation](#data-generation), so the two sections are one specification rather than two
-descriptions of the same thing. `M = 20` and `N = 1980` months are *not* fields: they are structural and
-live in `ablation_data.py`.
-
-**Timescales** — the spectrum of $\Lambda_R$, through `eigenvalue_yr` (a year is 12 steps).
-
-| field | default | symbol | sets |
-|---|---|---|---|
-| `tau1_yr` | `20` | $\tau_1$ | slow-mode e-folding time in years; $\lambda_1=e^{-1/(12\tau_1)}$ |
-| `tau_p_yr` | `2` | $\tau_p$ | damping time of the oscillating pair; $\rho=e^{-1/(12\tau_p)}$ |
-| `period_p_yr` | `4` | $2\pi/\theta$ | the pair's period in years; $\theta=2\pi/(12\cdot\texttt{period\_p\_yr})$ per month |
-| `complement_eig_range` | `(0.0, 0.1)` | $(\lambda_{\min},\lambda_{\max})$ | the uniform range the $M-3=17$ complement eigenvalues are drawn from; $0.1$ is $\tau\approx0.43$ months |
-
-**Internal variance shares**, in units of the forced variance $V^{(f)}$ (`config_budget`). Each share is
-per mode *group*, so the reference SNR is $1/(v_1+v_p+v_c)$ and the default $(1,1,1)$ gives $1/3$.
-
-| field | default | symbol | sets |
-|---|---|---|---|
-| `slow_variance` | `1.0` | $v_1$ | $s_1^2=v_1V^{(f)}$ |
-| `pair_variance` | `1.0` | $v_p$ | $s_p^2=\tfrac12v_pV^{(f)}$, per pair mode |
-| `complement_variance` | `1.0` | $v_c$ | $s_c^2=v_cV^{(f)}/(M-3)$, per complement mode |
-
-**Forcing in time.** The pattern is always the zonal-mean CO₂ profile $\hat b$; only $F(t)$ is configured.
-Fields marked *(analytic)* or *(gauss)* are read only by that `forcing_source`.
-
-| field | default | symbol | sets |
-|---|---|---|---|
-| `forcing_source` | `"analytic_gauss"` | — | `analytic` (exp), `analytic_gauss` (exp + two Gaussians), or `file` |
-| `forcing_file` | `"data_preparation/AR6_ERF_1750-2019.csv"` | — | *(file)* a relative path is relative to the repo root |
-| `forcing_column` | `"co2"` | — | *(file)* the column to read |
-| `record_end_year` | `2014` | $Y_{\mathrm{end}}$ | the record is Jan $(Y_{\mathrm{end}}-164)$ – Dec $Y_{\mathrm{end}}$, so $Y_0=1850$ |
-| `forcing_efold_yr` | `60` | $\tau_F$ | *(analytic)* e-folding of the exp ramp in years (the fit is 59.8) |
-| `gauss_efold_yr` | `65` | $\tau_G$ | *(gauss)* e-folding of the Gaussian model's exp (the fit is 63.2) |
-| `gauss_bump_amp` | `0` | $A_+$ | *(gauss)* positive Gaussian, W m⁻² beside $a=1.96$; `0` removes it (the fit is 0.048) |
-| `gauss_bump_year` | `1920` | $\mu_+$ | *(gauss)* its center (the fit is 1921.3) |
-| `gauss_bump_width_yr` | `20` | $\sigma_+$ | *(gauss)* its width (the fit is 17.9) |
-| `gauss_dip_amp` | `0.25` | $A_-$ | *(gauss)* negative Gaussian, subtracted (the fit is 0.137) |
-| `gauss_dip_year` | `1965` | $\mu_-$ | *(gauss)* its center (the fit is 1966.0) |
-| `gauss_dip_width_yr` | `15` | $\sigma_-$ | *(gauss)* its width (the fit is 14.1) |
-
-**Seeds.** The three seeds are what makes a run a pure function of its config.
-
-| field | default | symbol | sets |
-|---|---|---|---|
-| `pattern_seed` | `22` | — | the Haar rotation of the complement basis in `make_W` |
-| `eigenvalue_seed` | `20` | — | the draw of the 17 complement eigenvalues |
-| `noise_seed` | `0` | — | `SeedSequence(0).spawn(2)` → the spin-up and record noise streams |
-
-**Sweep levels** — the $\ell$ of each study in [Sweeps](#sweeps-the-ten-ablations). `None` means "derive
-it from the reference geometry", which is how the base overlap lands inside its own sweep.
-
-| field | default | sets |
-|---|---|---|
-| `total_snrs` | `(1/30, 1/10, 1/3, 1, 3, 10, 30)` | levels of `total_snr`, and the SNR axis of `joint_snr_timescale` |
-| `partial_snr_factors` | `(1/4, 1/2, 1, 2, 4)` | levels of all three `partial_snr_*` |
-| `slow_timescales_yr` | `(1, 2, 5, 10, 20, 50, 100)` | levels of both `slow_timescale_*`, and the $\tau_1$ axis of `joint_snr_timescale` |
-| `mode_overlaps` | `None` → `(0, 0.25, 0.457, 0.75, 0.9, 0.95)` | levels of `spatial_overlap`; `0.457` is the reference `pair_plane_overlap(W)` |
-| `b_overlaps` | `None` → `(0, 0.25, 0.5, 0.650, 0.8, 0.9, 1.0)` | levels of `forcing_overlap`; `0.650` is the reference `forcing_overlap(W, b)` |
-| `noise_overlaps` | `(0, 0.25, 0.5, 0.75, 0.9, 0.95)` | levels of `noise_overlap`; `0` is the reference, whose noisy modes are orthogonal to $w_1$ |
-| `n_realizations` | `100` | noise realizations $R$ per level |
-
-**Methods.**
-
-| field | default | sets |
-|---|---|---|
-| `lag` | `1` | the fit lag in months: $\hat A$ propagates $x(t)\to x(t+\texttt{lag})$ |
-| `optlag` | `60` | `LIM-opt`'s horizon in months |
-| `methods` | `("PullbackDMDc", "LIM", "LIM-opt", "LR")` | which estimators are fitted and scored |
-
-## Tests
-
-`run_tests.py` imports every `tests/test_*.py` and calls its module-level `test_*` functions — plain functions with
-asserts, no framework. It skips `tests/test_synthetic_pipeline.py`, which is not a test module but a script of
-end-to-end checks that writes `figures/tests/`; `run_synthetic_tests.sh` runs it afterwards. The checks and their
-tolerances are tabulated in the System checks table at the end of this file.
-
-## Data generation
-
-Follows the synthetic-example appendix of the paper, except for the forcing: the time series is an exponential plus
-one Gaussian dip, shaped after the AR6 CO₂ ERF, and the pattern is the zonal-mean CO₂ forcing profile (both
-replace the appendix's forcing). The code is `system_patterns.py` (patterns, modal matrix) and `ablation_data.py`
-(dynamics, forcing, simulation, sweeps).
-
-### The baseline system
-
-Everything that follows, in one place, with the default config substituted. The `baseline` run *is*
-this system; `dip1` differs from it in a single field (`gauss_dip_amp`). A 20-point latitude grid carries
-a 20-mode linear propagator, driven by a scalar CO₂-like forcing through a fixed spatial pattern and
-excited by stationary Gaussian noise:
-
-$$x(t)=Ax(t-1)+B\,y(t)+\xi(t),\qquad \xi(t)\overset{iid}{\sim}\mathcal N(0,\,WDW^\top),\qquad A=W\Lambda_RW^{-1}$$
-
-$$\Lambda_R=\operatorname{blkdiag}\big(\underbrace{\lambda_1}_{\text{slow}},\ \ \underbrace{\rho R_\theta}_{\text{pair}},\ \ \underbrace{\operatorname{diag}(\lambda_4,\dots,\lambda_{20})}_{17\text{ complement}}\big),\qquad R_\theta=\text{rotation by }\theta$$
-
-| | baseline value |
-|---|---|
-| grid, record | $M=20$ latitudes, poles included; $N=1980$ monthly steps, Jan 1850 – Dec 2014 |
-| slow mode | $w_1\propto\cos(\phi-\pi/4)$; $\tau_1=20$ yr $\Rightarrow\lambda_1=e^{-1/240}=0.99584$ |
-| oscillating pair | $w_2\propto\operatorname{sinc}(2\phi)$, $w_3\propto\dfrac{0.5-\cos10\phi}{0.5+\lvert10\phi\rvert}$; $\tau_p=2$ yr $\Rightarrow\rho=0.95919$, period 4 yr $\Rightarrow\theta=2\pi/48$ |
-| complement | $\lambda_k\overset{iid}{\sim}\mathcal U(0,0.1)$, $k=4,\dots,20$, from `eigenvalue_seed = 20`; $\tau\le0.43$ months |
-| forcing in time | $F(t)=c+a\,e^{(t-2014)/65}-0.25\,e^{-(t-1965)^2/(2\cdot15^2)}$ in W m⁻², with $c,a$ from the AR6 CO₂ fit, minus its own mean over the record: $y(t)=F(t)-\tfrac1N\sum_sF(s)$ |
-| forcing in space | $\hat b$, the unit-norm zonal-mean CO₂ radiative forcing profile, scaled into $B$ so the quasi-equilibrium start has unit norm |
-| noise | shares $(v_1,v_p,v_c)=(1,1,1)$, so $s_1^2=V^{(f)}$, $s_p^2=V^{(f)}/2$, $s_c^2=V^{(f)}/17$ and $\mathrm{SNR}=\tfrac13$ |
-| ensemble | $R=100$ realizations from `noise_seed = 0`, all sharing one forced response |
-
-![global-mean forced, internal and raw series; the four spatial patterns against latitude; and the centered forcing, for the baseline system](figures/ablations/baseline/modal_overview.png)
-
-The slow mode is the hard part of this system by construction. It takes the largest single-mode share of
-the drive ($\gamma_1=0.474$, against $0.230$ and $0.258$ for the pair), and because it also has by far the
-longest memory it ends up carrying the forced response almost alone: in modal coordinates $99.9\%$ of the
-forced response's variance sits in mode 1. Yet a 165-year record holds only $165/20=8.25$ of its
-e-foldings, so it is simultaneously the mode that matters most and the one an estimator has the least
-data to pin down. That is what every ablation below is built to stress.
-
-Each line is derived in the subsections below; the quantities that follow from them rather than being set
-— $V^{(f)}$, the spin-up length, the Gram matrix of the patterns — are collected in
-[Starting point](#starting-point-reference), and the ten ways this system is bent are in
-[Sweeps](#sweeps-the-ten-ablations).
-
-### Grid and patterns: `lat_grid`, `raw_patterns`
-$$\phi_i=-\tfrac{\pi}{2}+\tfrac{i\pi}{M-1},\quad i=0,\dots,M-1,\qquad M=20\ (\Delta\phi\approx 9.47^\circ,\ \text{poles included})$$
-$$a_1=\cos(\phi-\tfrac{\pi}{4}),\quad a_2=\operatorname{sinc}(2\phi)=\tfrac{\sin(2\pi\phi)}{2\pi\phi},\quad a_3=\frac{0.5-\cos(10\phi)}{0.5+|10\phi|},\quad b=\texttt{co2\_forcing\_pattern}(\phi)$$
-$b$ is the zonal-mean CO₂ radiative forcing (W m⁻²), interpolated linearly in $|\phi|$ from `CO2_ZONAL_FORCING`. The table is digitized every 5° from `figures/reference/co2_zonal_forcing.png`, with north and south averaged. It runs from 2.50 at the equator to 1.54 at the poles: positive everywhere and peaked at the equator.
-$$w_k=a_k/\|a_k\|_2,\qquad \hat b=b/\|b\|_2\quad(\text{no area weighting})$$
-The same convention holds downstream: `global_mean` is the plain mean over the $M$ grid points, not area weighted.
-Gram (uncentered): $w_1^\top w_2=0.396,\ w_1^\top w_3=0.329,\ w_2^\top w_3=0.278,\ \hat b^\top w_{1,2,3}=0.650,\,0.489,\,0.478$. Modal coefficients $\gamma=W^{-1}\hat b$: $0.47$ (slow), $0.23,\,0.26$ (pair), complement norm $0.68$.
-
-### Modal matrix: `make_W(M, seed=22)`
-$$S=[w_1,w_2,w_3],\qquad Q_0=\text{last }M-3\text{ columns of the complete QR of }S,\qquad Q_\perp=Q_0O$$
-$O$ is Haar orthogonal: the Q factor of a Gaussian matrix, with the signs of $\operatorname{diag}(R)$ absorbed.
-$$
-W=[S,\ Q_\perp],\qquad W^{-1}=\begin{bmatrix}S^{+}\\ Q_\perp^\top\end{bmatrix}\quad(\text{exact since }Q_\perp^\top S=0)
-$$
-The complement modes are not physical. Only their aggregate properties are meaningful.
-
-### Propagator: `System.Lambda_R`, `System.A`
-$$
-\Lambda_R=\operatorname{blkdiag}\!\left(\lambda_1,\ \begin{bmatrix}\rho\cos\theta&\rho\sin\theta\\-\rho\sin\theta&\rho\cos\theta\end{bmatrix},\ \operatorname{diag}(\lambda_4,\dots,\lambda_M)\right),\qquad A=W\Lambda_RW^{-1}
-$$
-$$\sigma(A)=\{\lambda_1,\ \rho e^{\pm i\theta},\ \lambda_k\},\qquad \text{pair eigenvector}\propto w_2+iw_3$$
-$$\tau(\lambda)=-1/\ln|\lambda|\ (\text{months}),\qquad \lambda=\texttt{eigenvalue}(\tau)=e^{-1/\tau},\qquad \text{period}=2\pi/\theta$$
-The three configured timescales enter through `eigenvalue_yr`, which counts a year as 12 steps, and the
-$M-3$ complement eigenvalues are drawn once from `eigenvalue_seed` and then held fixed in every sweep:
-$$\lambda_1=e^{-1/(12\tau_1)},\qquad \rho=e^{-1/(12\tau_p)},\qquad \theta=\frac{2\pi}{12\cdot\text{period}},\qquad \lambda_k\overset{iid}{\sim}\mathcal U(\lambda_{\min},\lambda_{\max}),\ \ k=4,\dots,M$$
-Only $\lambda_1$ is ever swept (`slow_timescale_*`, `joint_snr_timescale`); $\rho$, $\theta$ and the
-$\lambda_k$ are fixed throughout, so the fast end of the spectrum is a constant of every experiment.
-
-### Model
-$$x(t)=Ax(t-1)+B\,y(t)+\xi(t),\qquad \xi(t)\overset{iid}{\sim}\mathcal N(0,\,WDW^\top)$$
-$$z=W^{-1}x:\qquad z(t)=\Lambda_Rz(t-1)+\gamma\,y(t)+\hat\xi(t),\qquad \gamma=W^{-1}B,\quad \hat\xi\sim\mathcal N(0,D)$$
-$B$ is the scaled forcing matrix (see Forcing matrix); $\hat b$ is its unit-norm pattern.
-Simulation runs in modal coordinates (`run_modal`), and the result is mapped back by $x=Wz$.
-
-### Noise from modal variances: `System.modal_variances`, `System.noise_variances`
-$$D=\operatorname{diag}(\sigma_1^2,\sigma_p^2,\sigma_p^2,\sigma_4^2,\dots,\sigma_M^2)$$
-$$s_1^2=\tfrac{\sigma_1^2}{1-\lambda_1^2},\quad s_p^2=\tfrac{\sigma_p^2}{1-\rho^2},\quad s_k^2=\tfrac{\sigma_k^2}{1-\lambda_k^2}\quad\Longleftrightarrow\quad \sigma_1^2=s_1^2(1-\lambda_1^2),\ \ \sigma_p^2=s_p^2(1-\rho^2),\ \ \sigma_k^2=s_c^2(1-\lambda_k^2)$$
-The inputs are the three target modal variances $(s_1^2,s_p^2,s_c^2)$, stored as `s1_sq`, `sp_sq`, `sc_sq`. Changing an eigenvalue recomputes $\sigma^2$, so the modal variance stays fixed.
-
-Those three are not configured directly either. `config_budget` builds them from the variance *shares*
-$(v_1,v_p,v_c)$ — `slow_variance`, `pair_variance`, `complement_variance` — in units of the forced
-variance $V^{(f)}$:
-$$s_1^2=v_1V^{(f)},\qquad s_p^2=\tfrac{1}{2}v_pV^{(f)},\qquad s_c^2=\tfrac{1}{M-3}v_cV^{(f)}$$
-A share is per mode *group*, not per mode: $v_p$ is split over the pair's two modes and $v_c$ over the
-complement's $M-3=17$, so each group contributes exactly $v\,V^{(f)}$ to the internal variance total
-whatever $M$ is, and the three shares are directly comparable. `make_dataset` evaluates the budget on
-the level's own $V^{(f)}$, so a study that moves the forced variance carries the budget with it unless
-that study pins it (`slow_timescale_modal_variance`; see Sweeps).
-
-### Forcing: `centered_forcing`, `forcing_series`
-**Centering, always.** The forcing is centered on the observed interval, i.e. every month after the spin-up (the record, 1850–2014):
-$$y(t)=F(Y_0+t/12)-\tfrac1N\textstyle\sum_{s=0}^{N-1}F(Y_0+s/12),\qquad t=-T,\dots,N-1$$
-- **One definition.** `centered_forcing` is the only place where the centering is done.
-- **Same offset before the record.** The record mean is removed at all times, so the spin-up keeps the same offset as the record. This mirrors the real-world experiments, where `load_forcings_pullback` subtracts the record mean from both the record and the history.
-- **Used everywhere.** This one series generates the data, is the forcing passed to the methods (`forcings()` returns slices of it, unchanged), and is what every forcing plot draws (`compare_forcings.png`, `forced_response_shape.png`, and `forcing.png` under `figures/diagnostics/system/`).
-- **Enforced.** `make_dataset` asserts a zero record mean, and `test_forcing_centered_everywhere` checks every sweep level and the plotted curves.
-
-At the default, the past constant is $y=-0.666$ against a record range of $1.834$, and the mean over the 9601-month spin-up is $-0.654$. The forced response therefore starts in equilibrium with a negative forcing. For long $\tau_1$ it is still relaxing during the record and carries a large offset (`forced_response_ablations.png`).
-
-Record month $t=0,\dots,N-1$ is the fractional year $t_{\rm yr}=Y_0+t/12$, with $Y_0=\texttt{record\_end\_year}-164$. The default `record_end_year = 2014` gives a record from Jan 1850 to Dec 2014, matching the real-data experiments (`utils/data_utils.py`). Every plotted time axis is in these calendar years (`record_years`, `annual_years`, `spinup_years`).
-
-There is no amplitude parameter: $y$ carries the forcing's own units (W m⁻²) and the overall scale of the
-data is set by $B$ (below), not by the forcing. The forcing depends on absolute dates, so a longer spin-up
-only extends it backwards; the record values do not change.
-
-**Default: exp + one dip** (`forcing_source = "analytic_gauss"`, `co2_forcing_gauss_model`):
-$$F(t)=c+a\,e^{(t-2014)/\tau_G}+A_+e^{-(t-\mu_+)^2/2\sigma_+^2}-A_-e^{-(t-\mu_-)^2/2\sigma_-^2}$$
-- **Default values.** $\tau_G=65$ yr, a dip $A_-=0.25$ at $\mu_-=1965$ ($\sigma_-=15$ yr), and no bump ($A_+=0$; its shape defaults to 1920 and $\sigma_+=20$ yr). These are round numbers, not a fit.
-- **Provenance.** The joint least-squares fit of the exp and two Gaussians to the annual AR6 CO₂ values (`CO2_GAUSS_FIT`) gives:
-  - $c=-0.0054$, $a=1.96$ and e-folding 63.2 yr;
-  - a bump of 0.048 at 1921 ($\sigma$ 17.9 yr) and a dip of 0.137 at 1966 ($\sigma$ 14.1 yr);
-  - an RMSE of 0.0092 W m⁻², against 0.038 for the exponential.
-
-  The default deepens the dip and drops the bump. Against the true forcing (both centered), the default's record RMSE is $0.037$ W m⁻², against $0.046$ for the exponential, and its record-shape RMSE is $0.075$, against $0.093$.
-- **Shape parameters.**
-  - The parameters are `gauss_efold_yr`, `gauss_bump_amp`, `gauss_bump_year`, `gauss_bump_width_yr`, `gauss_dip_amp`, `gauss_dip_year` and `gauss_dip_width_yr`.
-  - Amplitudes are in W m⁻² next to the fixed $a=1.96$; only their ratio to the exponential matters, and 0 removes that Gaussian.
-  - Amplitudes must be $\ge0$, and widths and the e-folding $>0$.
-  - $c$ and $a$ stay at the fit, since they drop out.
-  - For example, `--set gauss_dip_amp=1` gives the amplified-dip run `dip1`.
-- **Constant past.** The Gaussians vanish before about 1850, so the past is constant: $|F-c|<10^{-3}$ of the rise before 1500.
-
-**Exp** (`forcing_source = "analytic"`, `co2_forcing_model`): $F(t)=c+a\,e^{(t-2014)/\tau_F}$, with $\tau_F=$ `forcing_efold_yr` $=60$ yr.
-- **Provenance.** The fit is least squares to the annual values 1750–2019 at mid-year (`CO2_FIT`): $c=0.0191$, $a=1.915$ and $\tau_F=59.8$ yr. Its RMSE is $0.038$ W m⁻², and $0.046$ over the record. The largest misfit is the mid-century bump.
-- **No polynomial.** A literal polynomial-plus-exponential diverges in the past, so the plain exponential is used.
-- **Constant past.** $|F-c|/(F(2014)-c)<10^{-3}$ for every year before 1590. Over the longest spin-up (4000 yr, at $\tau_1=100$ yr), the forced slow mode varies by less than $10^{-3}$ of its record range between spin-up years 1000 and 3000. The `forcing` diagnostic shows this.
-
-**File** (`forcing_source = "file"`): column `forcing_column` (default `co2`) of `forcing_file` (default `data_preparation/AR6_ERF_1750-2019.csv`; a relative path is relative to the repo root). `load_forcing_file` accepts two formats:
-- an annual CSV with a `year` column, interpolated to months with `interpolate` as for the real data;
-- a monthly CSV with a `time` column (`YYYY-MM-01`), used as is.
-
-Outside the data, $F$ is held at its first value (for AR6, $\approx0$: a constant past) and continued after the data at its linear trend over the last 10 years. `forcing_efold_yr` only affects `analytic`, and `forcing_file`/`forcing_column` only affect `file`.
-
-**Comparison and checks:**
-- `plot_forcing_comparison.py` plots the true forcing and both models, all centered on the record (`figures/diagnostics/data/compare_forcings.png`).
-- `plot_system_diagnostics.py` diagnostics:
-  - `forced_response_ablations`: what each ablation does to the data, one column per study — the columns of `results_sweeps.png`, in the same order and at the same width, so the two figures stack (`--studies` selects them here too). Four kinds of panel cover the nine studies, because no two of them change the same thing: `total_snr` and the `partial_snr_*` studies leave the system alone and only rescale the noise budget, so their forced response is *identical* at every level (the figure asserts it) and their columns draw one noise realization's global mean per level with that one forced response in black; the `slow_timescale_*` columns draw the global-mean forced response itself, which moves with $\tau_1$; and the overlap columns are spatial rather than time series, because what they ablate is a shape — the slow mode $w_1$ against latitude at every level, with $\hat b$ in black under `forcing_overlap`, where the $c=1$ curve lands on it exactly, the point at which the forcing drives the slow mode and nothing else; and under `noise_overlap`, whose forced response is held fixed and whose slow mode does not move, one noisy mode $q_4$ against latitude at every level with $w_1$ in black, closing on it as $c\to1$. The levels go on a colorbar beneath each column (log, or linear for the cosines, as `LINEAR_X` has it in the sweep figure's x axis), and the overlap columns rotate the reference system from the study table rather than simulating a dataset per level;
-  - `forced_response_shape`: the global-mean forced response and the forcing that drove it, both standardized, so only their shapes are compared (a slow mode lags the forcing and rounds its turns). The panel reports their correlation: $0.995$ at the starting point.
-
-![the standardized global-mean forced response against the standardized forcing that drove it, over the record](figures/ablations/baseline/forced_response_shape.png)
-
-### Forcing matrix: `System.y0`, `System.b_scale`, `System.B`
-$$y_0=y(-T),\qquad B=\frac{\hat b}{\|y_0\,(I-A)^{-1}\hat b\|_F},\qquad\text{so}\quad \|y_0\,(I-A)^{-1}B\|_F=1$$
-The system starts the spin-up in quasi-equilibrium with the constant past forcing $y_0$, and $B$ is scaled so that this initial state has unit norm. That fixes the scale of everything: the forced response, and through `config_budget` the noise budget too.
-
-- **$\hat b$ stays raw.** `System.b` is the unit-norm pattern (`B_HAT`, the Gram values above, the pattern panels). `System.B` is derived, never stored, so every `replace` that changes an eigenvalue, $W$ or a forcing field recomputes it. The dynamics and the comparison against a fitted $B$ both use `System.B`.
-- **Per system.** $A$ enters through $(I-A)^{-1}$, so the scale is recomputed at every sweep level. $\|(I-A)^{-1}\hat b\|$ grows roughly linearly in $\tau_1$ while $V^{(f)}$ grows more slowly (a slow mode cannot equilibrate within 165 yr), so $V^{(f)}$ now *falls* with $\tau_1$: $0.574$ at $\tau_1=1$ yr, $0.265$ at $20$ yr, $0.068$ at $100$ yr.
-- **Scale-invariant results.** Every budget except `slow_timescale_modal_variance`'s is proportional to that level's own $V^{(f)}$, so rescaling $B$ scales the forced response, the noise and the data by one common factor, with the same random draws. All four methods are linear and every score is a ratio, so `total_snr`, `partial_snr_*`, `slow_timescale_snr`, `spatial_overlap` and `joint_snr_timescale` are **bit-identical** to the old $V^{(f)}=M$ calibration. `slow_timescale_modal_variance` is the exception: it holds the budget fixed while $V^{(f)}$ follows $\tau_1$, so its SNR inverts (see Sweeps).
-  `test_sweeps_are_invariant_to_the_b_normalization` pins this down: it re-runs one level of every study with `System.B` patched back to the raw $\hat b$ and asserts the data is proportional to $10^{-12}$ everywhere *except* that study, where it asserts the opposite. End to end, every score (`forced_corr`, `forced_rel_rmse`, `slow_tau_log_ratio`, `slow_angle`, `pair_angle`) agrees to $3\times10^{-12}$ under the two normalizations; under the raw $\hat b$ the exempt study's SNR runs $0.0024\to2.11$ with $\tau_1$ instead of $0.72\to0.085$.
-
-### Spin-up and ground truth: `System.spinup`, `forced_response`, `internal_variability`
-$$T=\max\big(\lceil 40\,\max_k\tau(\lambda_k)\rceil,\ 1200\big)$$
-One spin-up serves both roles: it is where the truth is generated from, and it is the forcing window the methods are given (`forcings()`). It uses the longest decay time of any mode, so it still covers the pair when $\tau_1<\tau_p$, and 40 e-foldings leaves the slowest mode equilibrated to $e^{-40}\sim10^{-18}$ — `test_spinup` pins that. Because the methods see the forcing all the way back to where the truth starts, the true $A, B$ reproduce the forced response exactly; there is no truncation floor folded into any score.
-$$x^{(f)}(t)=Ax^{(f)}(t-1)+B\,y(t),\quad x^{(f)}(-T)=0\qquad(\text{shared by all realizations})$$
-$$x^{(i)}(t)=Ax^{(i)}(t-1)+\xi(t),\quad x^{(i)}(-T)=0,\qquad x=x^{(f)}+x^{(i)}\ (\text{linear, so}\ =x-x^{(f)})$$
-Times $t<0$ are discarded. Arrays are time-major: `forced` $(N,M)$, `internal` $(R,N,M)$, `data = forced + internal`.
-
-**Common random numbers:** `SeedSequence(seed).spawn(2)` gives separate spin-up and record streams. Every level of every sweep therefore uses the same record noise $\varepsilon(t)$, $t\ge0$, with $\hat\xi=\sqrt D\,\varepsilon$.
-
-### SNR: `theoretical_snr`, `empirical_snr`
-$$V^{(f)}=\textstyle\sum_{i=1}^M\operatorname{Var}_t\,x^{(f)}_i(t),\qquad \mathrm{SNR}=\frac{V^{(f)}}{s_1^2+2s_p^2+(M-3)s_c^2}$$
-Both variances are over the $N$ record months and summed over the $M$ grid points, so the SNR is a single
-number per level, not a field. At a budget built from the shares the $V^{(f)}$ cancels, which is what makes
-the reference SNR a property of the config alone rather than of the forcing's amplitude:
-$$\mathrm{SNR}_{\mathrm{ref}}=\frac{V^{(f)}}{v_1V^{(f)}+2\cdot\tfrac12v_pV^{(f)}+(M-3)\tfrac{v_cV^{(f)}}{M-3}}=\frac{1}{v_1+v_p+v_c}=\frac13\quad\text{at }(v_1,v_p,v_c)=(1,1,1)$$
-Every budget in Sweeps is quoted against this $\mathrm{SNR}_{\mathrm{ref}}$, and `total_snr` is defined by
-rescaling it.
-The empirical SNR is $V^{(f)}/\sum_i\operatorname{Var}_t x^{(i)}_i$ per realization. It scatters around the theoretical value, especially for long $\tau_1$.
-
-### Starting point: `REFERENCE`
-| | value |
-|---|---|
-| step, record | monthly, $N=1980$ (165 yr), $M=20$ |
-| patterns | `make_W(20, seed=22)` |
-| forcing | $c+a\,e^{(t-2014)/65\,\text{yr}}-0.25\,e^{-(t-1965)^2/2\cdot15^2}$, centered on the record Jan 1850 – Dec 2014 (`record_end_year = 2014`); pattern $\hat b$ = zonal-mean CO₂ forcing, scaled to $B$ |
-| slow | $\tau_1=20$ yr, $\lambda_1=e^{-1/240}=0.9958$ |
-| pair | $\tau_p=2$ yr, $\rho=e^{-1/24}=0.959$; period 4 yr, $\theta=2\pi/48$ (ACF first zero at 12 months) |
-| complement | $\lambda_k\overset{iid}{\sim}\mathcal U(0,0.1)$, 17 values, seed 20 |
-| budget (`equal_budget`) | $s_1^2=V^{(f)},\ s_p^2=V^{(f)}/2,\ s_c^2=V^{(f)}/17\ \Rightarrow\ \mathrm{SNR}=1/3$; $V^{(f)}=0.2655$ |
-| spin-up | $T=9601$ months |
-| realizations | `N_REALIZATIONS = 100` per configuration, seed 0 |
-
-### Sweeps: the ten ablations
-
-A study is a triple — how its levels are enumerated, how a level bends the reference system, and what
-noise budget that level gets — and the `STUDIES` table in `ablation_data.py` is the one place all three
-are written. Formally, level $\ell$ of study $\mathcal A$ gives
-
-$$\mathcal A:\ \ell\ \longmapsto\ \big(\mathcal S_{\mathcal A}(\ell),\ \mathcal B_{\mathcal A}(\ell)\big),\qquad \mathcal S:\ \text{reference system}\to\text{system},\qquad \mathcal B:\ V^{(f)}\to(s_1^2,s_p^2,s_c^2)$$
-
-$\mathcal S$ runs first; its forced response sets $V^{(f)}$; $\mathcal B$ is then evaluated on that
-$V^{(f)}$ (`make_dataset`). The patterns, the eigenvalue seed and the noise seed are fixed in every study,
-so two levels differ only through $\mathcal S$ and $\mathcal B$ — the record noise draws themselves are
-common to all of them.
-
-The table below is keyed by the **study key**, which is what `ablations.csv`'s `study` column holds and
-what `--studies` takes. The default level of each is in **bold**: it is the reference system, and it is
-what `default_level` marks with a grey vertical line in the sweep figure.
-
-| study | levels | $\mathcal S$ (system) | $\mathcal B$ (budget) and the resulting SNR |
-|---|---|---|---|
-| `total_snr` | $\mathrm{SNR}\in\{\tfrac1{30},\tfrac1{10},\mathbf{\tfrac13},1,3,10,30\}$ | unchanged | $(s_1^2,s_p^2,s_c^2)\times\dfrac{\mathrm{SNR}_{\mathrm{ref}}}{\mathrm{SNR}}$, so the SNR *is* the level. The system, forcing and forced response are byte-identical at every level; only how deeply the signal is buried changes. 10 and 30 extend the paper's grid toward a nearly noise-free end |
-| `partial_snr_slow` | $f\in\{\tfrac14,\tfrac12,\mathbf{1},2,4\}$ | unchanged | $s_1^2\to fs_1^2$, the other two at the reference. $\mathrm{SNR}=\dfrac{1}{v_p+v_c+fv_1}=\dfrac{1}{2+f}$ at $(1,1,1)$: $0.444,\,0.400,\,0.333,\,0.250,\,0.167$ |
-| `partial_snr_pair` | same | unchanged | $s_p^2\to fs_p^2$; same SNR values, since the shares are equal |
-| `partial_snr_complement` | same | unchanged | $s_c^2\to fs_c^2$; same again |
-| `slow_timescale_snr` | $\tau_1\in\{1,2,5,10,\mathbf{20},50,100\}$ yr | $\lambda_1\to e^{-1/(12\tau_1)}$ | the shares on *that level's* $V^{(f)}$, so $\mathrm{SNR}=\tfrac13$ throughout and $\tau_1$ moves alone |
-| `slow_timescale_modal_variance` | same | same | budget pinned to the reference's, so $\mathrm{SNR}=V^{(f)}(\tau_1)/I_{\mathrm{ref}}$ follows $V^{(f)}$, which under the $B$ scaling *falls* with $\tau_1$: $0.721,\,0.692,\,0.566,\,0.459,\,0.333,\,0.174,\,0.085$ |
-| `spatial_overlap` | $c\in\{0,0.25,\mathbf{0.457},0.75,0.9,0.95\}$ | `tilt_slow`: $w_1\to\sqrt{1-c^2}\,u_\perp+c\,u_\parallel$ | the shares on that level's $V^{(f)}$, so $\mathrm{SNR}=\tfrac13$ |
-| `forcing_overlap` | $c\in\{0,0.25,0.5,\mathbf{0.650},0.8,0.9,1\}$ | `rotate_slow_to_b`: $w_1\to R(\delta)w_1$ | same, $\mathrm{SNR}=\tfrac13$ |
-| `noise_overlap` | $c\in\{\mathbf{0},0.25,0.5,0.75,0.9,0.95\}$ | `tilt_noise_to_slow`: $q_k\to\sqrt{1-c^2}\,q_k+c\,\varepsilon_kw_1$ for all 17 noisy modes | same, $\mathrm{SNR}=\tfrac13$ — and exactly so: the tilt moves where the noise lands, not how much there is |
-| `joint_snr_timescale` | the $7\times7$ product $(\mathrm{SNR},\tau_1)$ | $\lambda_1\to e^{-1/(12\tau_1)}$ | as `total_snr`. Not a curve but the phase diagram's grid; `param_value` records the SNR only, and `SWEEP_STUDIES` excludes it from the sweep columns for that reason |
-
-$I_{\mathrm{ref}}=s_1^2+2s_p^2+(M-3)s_c^2$ is the reference internal variance, $0.796$ at the default.
-The level counts add up to the run's total:
-
-$$\underbrace{7}_{\texttt{total\_snr}}+\underbrace{3\times5}_{\texttt{partial\_snr\_*}}+\underbrace{2\times7}_{\texttt{slow\_timescale\_*}}+\underbrace{6}_{\texttt{spatial\_overlap}}+\underbrace{7}_{\texttt{forcing\_overlap}}+\underbrace{6}_{\texttt{noise\_overlap}}+\underbrace{49}_{\texttt{joint\_snr\_timescale}}=104$$
-
-and $104\times100$ realizations $\times\,4$ methods $=41\,600$ rows of `ablations.csv`.
-
-Four of the ten are the sweep figure's columns (`DEFAULT_STUDIES`): `total_snr`,
-`slow_timescale_modal_variance` and `partial_snr_slow`, the three that move the scores, and `noise_overlap`
-(below). The slow-timescale sweep replaces the
-old temporal-overlap ablation: $\tau_1=1$–$2$ yr overlaps $\tau_p=2$ yr.
-
-Spatial overlap (`tilt_slow`, `pair_plane_overlap`): $u_\parallel$ and $u_\perp$ are the unit parts of $w_1$ inside and outside $\operatorname{span}(w_2,w_3)$, and $c=\cos\angle(w_1,\operatorname{span}(w_2,w_3))$.
-- $c=0.457$ is the default $w_1$.
-- $w_1$ stays in $\operatorname{span}(S)$, so $Q_\perp$ is unchanged. $W^{-1}=[\operatorname{pinv}(S);Q_\perp^\top]$ is recomputed.
-
-Forcing overlap (`rotate_slow_to_b`, `forcing_overlap`): the same idea aimed at the forcing instead of the pair. `spatial_overlap` asks how well the slow mode is separated from the other *modes*; this asks how well it is aligned with what *drives* it, which is what decides whether the forced response is identifiable from the dynamics at all. With $u=w_1/\|w_1\|$ and $e_2=(\hat b-(u^\top\hat b)u)/\|\hat b-(u^\top\hat b)u\|$ the orthonormal frame of the plane $\operatorname{span}(w_1,\hat b)$:
-
-$$R(\delta)=I+(\cos\delta-1)(uu^\top+e_2e_2^\top)+\sin\delta\,(e_2u^\top-ue_2^\top)\in SO(M),\qquad \delta=\alpha-\beta,\quad \alpha=\angle(w_1,\hat b),\ \ \beta=\arccos c$$
-
-$$\cos\delta=\cos\alpha\cos\beta+\sin\alpha\sin\beta,\qquad \sin\delta=\sin\alpha\cos\beta-\cos\alpha\sin\beta,\qquad \cos\alpha=u^\top\hat b,\quad \sin\alpha=\|\hat b-(u^\top\hat b)u\|$$
-
-$$w_1\to R(\delta)\,w_1=c\,\hat b+\sqrt{1-c^2}\,u_\perp,\qquad u_\perp=\frac{w_1-(w_1^\top\hat b)\hat b}{\|w_1-(w_1^\top\hat b)\hat b\|},\qquad c=\cos\angle(w_1,\hat b)$$
-
-- **A rotation of $w_1$ alone.** $R$ rotates the plane $\operatorname{span}(w_1,\hat b)$ and fixes its orthogonal complement, so $w_1$ travels along the unit sphere's geodesic toward $\hat b$ and keeps unit norm. It is applied to the slow mode's column only: $w_2$, $w_3$, $Q_\perp$ and $\hat b$ do not move, as in `tilt_slow`. The closed form on the third line is what the rotation evaluates to, and agrees with it to $10^{-16}$. $c=0.650$ is $\delta=0$ and reproduces the reference system.
-- **No angle is ever formed.** $\arccos$ loses precision like $1/\sqrt{1-x^2}$, so computing $\delta$ as a difference of two arccosines would be noisy exactly where the sweep is most interesting — $w_1$ near $\hat b$, or a level near $\pm1$. The subtraction identities on the second line need only each angle's cosine and sine, and both come without cancellation: $\sin\alpha$ is a norm, and $1-c^2$ is factored as $(1-c)(1+c)$. In a stressed geometry ($w_1$ nearly parallel to $\hat b$, $c\to1$) the arccos form plateaus at $5\times10^{-10}$ where this one reaches $6\times10^{-17}$; at the project's own $w_1^\top\hat b=0.650$ both are already exact, so this buys robustness for other `pattern_seed`s and finer grids rather than fixing the default.
-- **$W^{-1}$ is the exact inverse.** Unlike `tilt_slow`, $w_1$ leaves $\operatorname{span}(S)$, so $Q_\perp^\top w_1\neq0$ and $[\operatorname{pinv}(S);Q_\perp^\top]$ is no longer the inverse. `np.linalg.inv(W)` is used instead, and is well conditioned across the sweep: $\operatorname{cond}(W)$ runs $1.96,\,1.67,\,1.60,\,1.67,\,1.94,\,2.33,\,4.58$ and $W^{-1}W=I$ to $6\times10^{-16}$.
-- **What it controls.** The slow mode's share of the drive is $\gamma_1=(W^{-1}\hat b)_1$: $0.520,\,0.474,\,0.462,\,0.474,\,0.512,\,0.575,\,1.000$. It is *not* monotone in $c$, because $W^{-1}$ is not orthogonal — aligning the pattern is not the same as aligning the drive. Only the endpoint is unambiguous: at $c=1$, $w_1=\hat b$ and $\gamma_1=1$, so the forcing drives the slow mode and nothing else.
-- **Not orthogonal to `spatial_overlap`.** Moving $w_1$ alone also moves its overlap with the pair plane, $0.104\to0.457\to0.605$ across the sweep. The two studies are to be read together, not as independent axes.
-
-Noise overlap (`tilt_noise_to_slow`, `noise_overlap`): how much the fast noise looks like the slow mode in space. In the reference the two never overlap — `make_W` builds the 17 noisy (complement) patterns $q_k$ orthogonal to $w_1$, so no weather-like noise ever lands on the slow mode's fingerprint. Real internal variability is not like that. This study tips every noisy pattern toward the slow one by the same angle:
-
-$$q_k\;\longrightarrow\;q_k'=\sqrt{1-c^2}\,q_k+c\,\varepsilon_k\,w_1,\qquad k=4,\dots,M,\qquad \varepsilon_k=\pm1,\qquad c=\lvert\cos\angle(q_k',w_1)\rvert$$
-
-- **The noisy modes move toward the slow mode, not the reverse.** Moving $w_1$ would move the truth, its overlap with the forcing and its overlap with the pair all at once, as `forcing_overlap` does. Moving the $q_k$ keeps $w_1$, $w_2$, $w_3$, $\hat b$, every eigenvalue and every modal variance where they were, so the study changes one thing: where the noise lands in space. Because $q_k\perp w_1$, each step is a rotation of $q_k$ in its own plane $\operatorname{span}(q_k,w_1)$ and keeps it unit norm. $c=0$ is the reference; $c=1$ is excluded, where every noisy mode would *be* $\pm w_1$ and $W$ would be singular.
-- **How much noise there is does not change.** The modal amplitudes are independent and every pattern has unit norm, so the total internal variance $\sum_k\|w_k\|^2s_k^2$ is the same at every level, and the SNR is exactly $\tfrac13$ throughout without any rescaling.
-- **How much of it sits on the slow fingerprint does.** Projected onto $w_1$,
-  $$\operatorname{Var}\big(w_1^\top x^{(i)}\big)=\underbrace{s_1^2+\big[(w_1^\top w_2)^2+(w_1^\top w_3)^2\big]s_p^2}_{1.133\,V^{(f)}\text{ at the default}}\;+\;c^2\,v_c\,V^{(f)},$$
-  so a fraction $c^2$ of the fast-noise budget now lands on the slow pattern, and the noise along $w_1$ grows by $1.000,\,1.055,\,1.221,\,1.497,\,1.715,\,1.797$ across the levels. The slow mode's own amplitude $z_1$ is no noisier; what changes is that the noise now *looks like it*, so a method has to tell them apart by their timescale — 20 years against under half a month — rather than by their pattern.
-- **The signs hold the forced response fixed.** Tilting the $q_k$ changes $W^{-1}$, and with it how the forcing splits among the modes: the slow mode's share becomes $\gamma_1'=\gamma_1-\tfrac{c}{\sqrt{1-c^2}}\sum_k\varepsilon_k\gamma_k$. With every $\varepsilon_k=+1$ it would grow sixfold, $0.47\to3.0$, and the study would be about the forcing rather than the noise. `balanced_signs` instead picks the $\pm$ pattern whose forcing shares cancel, by exhaustive search over the $2^{16}$ candidates with $\varepsilon_4=+1$: 6 noisy modes tilt toward $+w_1$ and 11 toward $-w_1$, $\lvert\sum_k\varepsilon_k\gamma_k\rvert=1.3\times10^{-5}$, and $\gamma_1$ stays at $0.4737$ to $4\times10^{-5}$ at every level. What is left is the noisy modes' own, near-instantaneous forced response, now partly along $w_1$: the forced response moves by at most $6.7\times10^{-4}$ of its range and $V^{(f)}$ by $0.1\%$. The signs depend on $W$ and $\hat b$ only, so they are computed once at the reference (`Reference.noise_signs`) and pinned in `test_the_seeded_draws_are_pinned`. The noise along $w_1$ does not depend on them: only $c^2$ enters.
-- **$W^{-1}$ is the exact inverse**, as in `forcing_overlap`: the $q_k$ leave the orthogonal complement of $\operatorname{span}(S)$. $W$ grows less well conditioned as the noisy modes close on $w_1$, $\operatorname{cond}(W)=1.67,\,3.0,\,7.1,\,16.9,\,34.7,\,53$, and $W^{-1}W=I$ to $2\times10^{-15}$.
-
-### Fitting interface: `SyntheticDataset.forcings()`
-$$\texttt{long\_forcings}=y(-T),\dots,y(N-1)\ \in\mathbb R^{(T+N)\times1},\qquad \texttt{short\_forcings}=y(0..N-1),\qquad \texttt{transition\_time}=T$$
-The forcing enters at the target time, which matches `PullbackDMDc` ($x_t=Ax_{t-\text{lag}}+Bf_t$), so no shift is needed. The methods get the whole series the truth was generated from, so the window scales with the memory it has to reach past and costs the reconstruction nothing; a fixed window would not, being 100 e-foldings at $\tau_1=1$ yr but a single one at 100 yr.
-
-### Caveats
-- **Sample variances.** For AR(1), the relative std of the sample variance over $N$ steps is $\approx\sqrt{2(1+\lambda^2)/((1-\lambda^2)N)}$, which is $0.49$ at $\tau_1=20$ yr. Mean removal also biases $\operatorname{Var}_t$ of the slow mode low.
-- **Pair identifiability.** The pair covariance is isotropic, so evaluate the pair through its plane (principal angles) and its eigenvalue, not pattern by pattern.
-- **Complement modes.** Individual modes and their forcing coefficients depend on the seed. Interpret only aggregates.
-- **Lag-$\tau$ fits.** The propagator is $A^\tau$. The fitted forcing matrix approximates $(\sum_{m<\tau}A^m)B$, so compare forced responses, not $B$.
-- **Performance.** The per-step loop is BLAS-thread bound. Run with `OMP_NUM_THREADS=1`, which is about 50× less CPU time on the cluster nodes.
-
-### System checks: `tests/test_synthetic_pipeline.py` → `figures/tests/`
-| check | figure(s) | asserts |
-|---|---|---|
-| `plot_system_check` | `system_check.png` | eigenvectors of $A$: slow $\parallel w_1$, pair $=c(w_2+iw_3)$ (1e-10) |
-| `plot_ensemble_spaghetti` | `ensemble_spaghetti.png` | none (10 realizations + forced, annual means) |
-| `check_dmdc_recovery` | `dmdc_recovery_check.png` | noise-free, white $y$: PullbackDMDc recovers $\lambda_1$, $\rho e^{i\theta}$, $B$, $w_1$ and the plane $\operatorname{span}(w_2,w_3)$ (1e-8) |
-| `check_forced_internal_split` | `forced_internal_spaghetti.png`, `forced_internal_convergence.png`, `modal_overview.png` | modal simulator equals a direct $x$-space simulation of the model (1e-9 relative); ensemble mean $\to$ forced at slope $<-0.4$ and to within $15\%$ of $\operatorname{rms}_c(x^{(f)})$ at $K=256$. `modal_overview.png` (no asserts) has three panels: global means (raw, internal, forced), the spatial patterns, and the forcing |
-| `check_forced_internal_recovery` | `forced_internal_recovery.png`, `forced_internal_recovery_mse.png` | starting point only (SNR 1/3, 100 realizations): mirrored errors asserted; skill (correlation, errors, slow eigenvalue) reported, not asserted |
-
-The recovery check no longer prints an oracle: the methods see the whole forcing series, so the true $A,B$ reproduce the forced response exactly and there is no truncation floor left to report — row (a) is the method's own error throughout. What degrades at long $\tau_1$ is the fit, not the window. The 165-yr record holds only $1.65$ e-foldings at $\tau_1=100$ yr, so $\hat\lambda_1$ is badly dispersed — $\hat\tau_1$ spans $21$-$480$ yr across realizations and methods — and that dispersion is already there with the forcing removed entirely, so it is near-unit-root estimation rather than any confusion between $A$ and $B$. The reconstruction then amplifies it through $1/(1-\hat\lambda_1)$, which is why row (a) degrades steeply rather than gracefully.
+| `total_snr` | SNR 1/30 … 30 | every noise share in `split`, scaled by `snr_ref / snr` |
+| `partial_snr_{slow,pair,complement}` | factor ¼ … 4 | one noise share in `split` |
+| `slow_timescale_snr` | τ1 = 1 … 100 yr | `tau1`; SNR fixed, because the split is relative to each level's own V_f |
+| `slow_timescale_modal_variance` | τ1 = 1 … 100 yr | `tau1`, with the noise shares rescaled by V_f(ref) / V_f(τ1) so that the absolute variances stay fixed |
+| `obs_noise` | v = 0.1 (ref) … 3 | the measurement-noise share `split[4]`, internal shares fixed, so the SNR falls (his `__main__` levels) |
+| `forcing_rotation` | b_rot = 0 (ref, flat B), 0.25, 0.5, 0.75, 1 (B = w1) | `b_rot`, the fraction of the angle by which B is rotated from the flat pattern to w1 |
+| `joint_snr_timescale` | 7 × 7 grid | `tau1` and the `split` scale together (phase diagram) |
+
+A variant of the whole system is a run, not a study. For example, `dip1` is `--set depth=1`.
+
+## Outputs
+
+`results/<run>/` holds:
+- `config.json`, which fully determines the run's numbers;
+- `provenance.json`, with the seeds, conventions and package versions;
+- `ablations.csv`, with one row per (study, level, realization, method), the scores
+  (`forced_rel_rmse`, `forced_corr`, `slow_tau_yr`, `slow_corr`, `pair_corr`, …) and `snr`/`tau1_yr`;
+- `slow_modes.npz`, the fitted slow-mode patterns plus the truth per level.
+
+## Reproducibility
+
+All randomness is seeded:
+- `w_seed` sets the noise-mode patterns.
+- `eig_seed` sets the noise-mode eigenvalues.
+- `noise_seed` sets the `rng` of `generate_ensemble`.
+
+Every level draws from the same `noise_seed`. So levels with the same spin-up length share their noise draws,
+which is every study except the τ1 ones. A run is a pure function of its `config.json`, given the same environment.
+
+## Notes
+
+- The slow mode's variance over the 165-yr record, about the record mean, is about 0.8 of its stationary value
+  at τ1 = 20 yr. That is why the empirical SNR in `ensemble_diagnostics.pdf` sits slightly above the theoretical one.
+- `b_rot = 1` is the reviewer's case, B = w1: then `W_inv @ B = [1, 0, …, 0]`, so the forcing drives the slow mode alone.

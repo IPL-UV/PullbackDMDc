@@ -7,9 +7,6 @@
 Imports every tests/test_*.py and calls its module-level test_* functions in definition order.
 The tests are plain functions with asserts, so no test framework is needed. A failure is reported
 with its traceback and the run continues; the exit status is 1 if anything failed.
-
-tests/test_synthetic_pipeline.py is skipped here: it defines no test_* functions. It is a script,
-run it directly (run_synthetic_tests.sh does).
 """
 
 import argparse
@@ -21,10 +18,9 @@ import traceback
 
 SYNTHETIC_DIR = pathlib.Path(__file__).resolve().parent
 TESTS_DIR = SYNTHETIC_DIR / "tests"
-SKIP = {"test_synthetic_pipeline"}
 
 # Same two entries tests/conftest.py and the test modules rely on: the package dir for
-# `from ablation_data import ...` and the tests dir for `from support import ...`.
+# `from ablations import ...` and the tests dir for `from support import ...`.
 for path in (TESTS_DIR, SYNTHETIC_DIR):
     sys.path.insert(0, str(path))
 
@@ -41,8 +37,6 @@ def collect(only=None):
     """(module_name, test_name, function) for every test, modules and tests in definition order."""
     found = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
-        if path.stem in SKIP:
-            continue
         module = load(path)
         for name, fn in vars(module).items():  # insertion order == definition order
             if name.startswith("test_") and callable(fn) and getattr(fn, "__module__", None) == path.stem:

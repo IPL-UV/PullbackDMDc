@@ -9,19 +9,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 PAGE_W = 13  # inches, the width of a full-width figure
-TALL_ROW = 2.6  # inches per row of latitude panels, for reading vertical differences
-# The study-column figures -- results_sweeps, results_slow_mode_shapes, forced_response_ablations -- are all
+# The study-column figures -- results_sweeps and results_slow_mode_shapes -- are both
 # laid out on this grid: one column per ablation study at COLUMN_W, one row per method or metric at ROW_H, and
-# LEGEND_INCHES kept clear at the right for the legends plot_sweeps hangs off its last panel. Every one of the
-# three reserves the strip, whether or not it has a legend to put there: they are meant to be stacked and read
+# LEGEND_INCHES kept clear at the right for the legends plot_sweeps hangs off its last panel. Both
+# reserve the strip, whether or not it has a legend to put there: they are meant to be stacked and read
 # column by column, and a figure that skips the reservation lays its columns out at a different pitch.
 COLUMN_W = 3.1
 ROW_H = 2.5
 LEGEND_INCHES = 1.45
 PANEL_TITLE = 8  # the 20 latitude panels sit tighter than a normal axes title
 ZERO_GREY = "0.5"
-RECORD_GREY = "0.92"  # shading behind the record interval
-FORCING_COLORS = {"file": "0.6", "analytic": "k", "analytic_gauss": "tab:blue"}
 
 mpl.rcParams.update({
     "font.family": "sans-serif",
@@ -83,34 +80,3 @@ def level_ticklabels(levels, norm):
 def zero_line(ax, **kwargs):
     """The y = 0 reference line every timeseries panel draws."""
     return ax.axhline(0, color=ZERO_GREY, linewidth=0.6, **kwargs)
-
-
-def record_span(ax, record, **kwargs):
-    """Shade the record interval behind the curves."""
-    return ax.axvspan(record[0], record[-1], color=RECORD_GREY, zorder=0, **kwargs)
-
-
-def rmse(a, b):
-    return float(np.sqrt(np.mean((a - b) ** 2)))
-
-
-def forcing_panel(ax, t_yr, curves, bold=None, bold_width=2.6, width=1.2, bold_suffix=""):
-    """Centered forcing curves {source: (values, label)}; the `bold` source is drawn heavier."""
-    for name, (values, text) in curves.items():
-        emphasized = name == bold
-        ax.plot(t_yr, values, color=FORCING_COLORS[name], linewidth=bold_width if emphasized else width,
-                label=text + (bold_suffix if emphasized else ""))
-    zero_line(ax)
-    ax.set_ylabel("W m$^{-2}$, centered on the record")
-    ax.legend(loc="upper left")
-
-
-def residual_panel(ax, t_yr, truth, models, in_record, names=None, precision=3):
-    """Each model minus `truth`, labelled with its overall and record RMSE."""
-    for name, (values, _) in models.items():
-        ax.plot(t_yr, values - truth, color=FORCING_COLORS[name], linewidth=1,
-                label=f"{(names or {}).get(name, name)}: RMSE {rmse(values, truth):.{precision}f} "
-                      f"(record {rmse(values[in_record], truth[in_record]):.{precision}f}) W m$^{{-2}}$")
-    zero_line(ax)
-    ax.set_ylabel("W m$^{-2}$")
-    ax.legend(loc="lower left")

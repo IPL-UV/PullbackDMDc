@@ -4,14 +4,13 @@ import tempfile
 import numpy as np
 import pandas as pd
 
-from ablation_data import M
+from ablations import M
 from config import DEFAULT, with_overrides
 from plot_ablation_run_results import (DEFAULT_STUDIES, ROW_SPECS, Run, default_level, median_residual,
                                        plot_forcing_change, plot_phase, plot_phase_change,
                                        plot_slow_mode_shapes, plot_sweeps)
-from plot_system_diagnostics import plot_forced_response_ablations
 
-# the four default columns plus the ones the figures only show via --studies: spatial_overlap covers the
+# the five default columns plus the ones the figures only show via --studies: forcing_rotation covers the
 # LINEAR_X branch, and partial_snr_pair covers the pair_corr variant of row (c)
 PARAM_NAMES = {
     "total_snr": "SNR",
@@ -20,9 +19,8 @@ PARAM_NAMES = {
     "partial_snr_complement": "complement variance factor",
     "slow_timescale_modal_variance": r"$\tau_1$ (yr)",
     "slow_timescale_snr": r"$\tau_1$ (yr)",
-    "spatial_overlap": "mode overlap",
-    "forcing_overlap": r"$\cos\angle(w_1,\hat b)$",
-    "noise_overlap": r"$|\cos\angle(q_k,w_1)|$",
+    "obs_noise": r"measurement noise share $v$",
+    "forcing_rotation": r"$b_{rot}$ (B: flat $\to w_1$)",
 }
 MODE_METHODS = ("PullbackDMDc", "LIM", "truth")
 
@@ -39,11 +37,11 @@ def make_run(name, cfg, offset=0.0):
                     method=method,
                     # the true tau_1 is the swept parameter in the timescale studies and the run's
                     # config everywhere else, so row (b)'s truth line is exercised both ways
-                    tau1_yr=value if study.startswith("slow_timescale") else cfg.tau1_yr,
+                    tau1_yr=value if study.startswith("slow_timescale") else cfg.tau1,
                     forced_corr=0.75 + 0.2 * value + shift + offset,
                     forced_rel_rmse=0.8 - 0.3 * value - shift,
                     slow_eig_err=0.01 + shift,
-                    slow_tau_yr=cfg.tau1_yr * (1.3 + shift),
+                    slow_tau_yr=cfg.tau1 * (1.3 + shift),
                     slow_tau_rel_err=0.35 + shift,
                     slow_tau_log_ratio=0.3 + shift,
                     slow_unstable=0.0 if method == "PullbackDMDc" else 0.5,
@@ -70,15 +68,15 @@ def make_run(name, cfg, offset=0.0):
 def make_modes():
     """A stand-in slow_modes.npz frame: a pattern per (study, level, method), plus the per-level truth.
 
-    The truth is varied in the overlap studies and held fixed elsewhere, so the figure's "is the truth
-    moving?" branch is exercised both ways.
+    The truth is varied per level in the stand-in obs_noise and held fixed elsewhere, so the figure's per-level
+    differencing is exercised both ways.
     """
     lat = np.linspace(-1, 1, M)
     rows = []
     for study, param_name in PARAM_NAMES.items():
         for value in (0.1, 1.0):
             for method in MODE_METHODS:
-                moves = study in {"spatial_overlap", "forcing_overlap"} and method == "truth"
+                moves = study == "obs_noise" and method == "truth"
                 pattern = np.cos(lat * (1 + value)) if moves else np.cos(lat)
                 rows.append(dict(study=study, param_name=param_name, param_value=value, tau1_yr=20.0,
                                  realization=0, method=method,
@@ -88,7 +86,7 @@ def make_modes():
 
 def test_ablation_run_result_figures():
     reference = make_run("baseline", DEFAULT)
-    variant = make_run("slow50", with_overrides(DEFAULT, ["tau1_yr=50"]), offset=0.02)
+    variant = make_run("slow50", with_overrides(DEFAULT, ["tau1=50"]), offset=0.02)
     with tempfile.TemporaryDirectory() as tmp:
         paths = {
             "sweeps": pathlib.Path(tmp) / "sweeps.png",
@@ -109,11 +107,11 @@ def test_sweep_columns_follow_the_studies_asked_for():
         assert default == list(DEFAULT_STUDIES)
 
         # --studies picks any other selection, left to right, and sets the column order
-        chosen = ("spatial_overlap", "total_snr")
+        chosen = ("obs_noise", "total_snr")
         assert plot_sweeps([run], pathlib.Path(tmp) / "chosen.png", studies=chosen) == list(chosen)
 
         # a study no run measured is dropped rather than drawn empty, defaults included
-        thin = Run("thin", DEFAULT, run.results[run.results.study != "partial_snr_slow"])
+        thin = Run("thin", DEFAULT, run.results[run.results.study != "partial_snr_slow"], run.modes)
         assert "partial_snr_slow" in DEFAULT_STUDIES
         assert "partial_snr_slow" not in plot_sweeps([thin], pathlib.Path(tmp) / "thin.png")
         assert plot_sweeps([thin], pathlib.Path(tmp) / "none.png", studies=("partial_snr_slow",)) == []
@@ -142,39 +140,24 @@ def test_rows_are_the_three_metrics():
     assert all(spec.truth is None for spec in ROW_SPECS if spec is not ROW_SPECS[1])
 
 
-def test_a_legacy_run_skips_the_metrics_it_never_scored():
-    """results/b_unscaled/ predates the operator columns: its rows are left empty, not raised on."""
-    run = make_run("legacy", DEFAULT)
-    legacy = Run("legacy", DEFAULT, run.results.drop(columns=["slow_tau_yr", "slow_corr", "pair_corr"]))
-    with tempfile.TemporaryDirectory() as tmp:
-        path = pathlib.Path(tmp) / "legacy.png"
-        assert plot_sweeps([legacy], path) == list(DEFAULT_STUDIES)
-        assert path.stat().st_size > 0
-
-
 def test_the_study_column_figures_are_laid_out_on_one_grid():
-    """results_sweeps, results_slow_mode_shapes and forced_response_ablations stack, so a column of one
-    sits over the same column of the others: same studies, same order, same width.
+    """results_sweeps and results_slow_mode_shapes stack, so a column of one sits over the same column of
+    the other: same studies, same order, same width.
 
     Each is saved with bbox="tight", which crops to its own contents, so the test is on the saved images:
-    the same study selection has to come out the same number of pixels wide in all three. The three differ
-    by a few pixels of tick-label margin -- hence the tolerance -- but a figure that stopped reserving
+    the same study selection has to come out the same number of pixels wide in both. They differ by a few
+    pixels of tick-label margin -- hence the tolerance -- but a figure that stopped reserving
     LEGEND_INCHES, or dropped to a different COLUMN_W, would be out by a sixth of its width.
     """
-    # a cheap selection: spatial_overlap needs no dataset simulated at all, and total_snr's levels are
-    # the fast ones. No slow_timescale column, whose tau_1 = 100 yr level costs a 48 000-month spin-up.
-    studies = ("total_snr", "spatial_overlap")
-    cfg = with_overrides(DEFAULT, ["total_snrs=(0.1,1,10)"])
-    run = make_run("baseline", cfg)
+    studies = ("total_snr", "obs_noise")
+    run = make_run("baseline", DEFAULT)
     with tempfile.TemporaryDirectory() as tmp:
-        paths = {name: pathlib.Path(tmp) / f"{name}.png" for name in ("sweeps", "shapes", "ablations")}
+        paths = {name: pathlib.Path(tmp) / f"{name}.png" for name in ("sweeps", "shapes")}
         plot_sweeps([run], paths["sweeps"], studies=studies)
         plot_slow_mode_shapes(run, paths["shapes"], studies=studies)
-        plot_forced_response_ablations(paths["ablations"], cfg=cfg, studies=studies)
         # the PNG's IHDR width, bytes 16:20, so the test needs no image library
         widths = {name: int.from_bytes(path.read_bytes()[16:20], "big") for name, path in paths.items()}
         assert max(widths.values()) - min(widths.values()) < 0.03 * min(widths.values()), widths
-
 
 def test_the_residual_is_the_departure_from_that_level_s_truth():
     """A fit on the truth leaves nothing, and an offset fit leaves exactly the offset."""
@@ -186,27 +169,19 @@ def test_the_residual_is_the_departure_from_that_level_s_truth():
 
 
 def test_slow_mode_shape_figure():
-    """Both branches of the truth: fixed in total_snr, moving per level in the overlap studies."""
+    """Both branches of the truth: fixed in total_snr, moving per level in the stand-in obs_noise."""
     run = make_run("baseline", DEFAULT)
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "shapes.png"
-        drawn = plot_slow_mode_shapes(run, path, studies=("total_snr", "spatial_overlap", "forcing_overlap"))
-        assert drawn == ["total_snr", "spatial_overlap", "forcing_overlap"]
+        drawn = plot_slow_mode_shapes(run, path, studies=("total_snr", "obs_noise"))
+        assert drawn == ["total_snr", "obs_noise"]
         assert path.stat().st_size > 0
 
 
-def test_slow_mode_shape_figure_skips_a_run_without_patterns():
-    """b_unscaled predates slow_modes.npz: no figure, rather than a crash."""
-    legacy = Run("b_unscaled", DEFAULT, make_run("x", DEFAULT).results, None)
-    with tempfile.TemporaryDirectory() as tmp:
-        path = pathlib.Path(tmp) / "shapes.png"
-        assert plot_slow_mode_shapes(legacy, path) == []
-        assert not path.exists()
-
-
 def test_forcing_change_figure():
-    reference = make_run("baseline", DEFAULT)
-    variant = make_run("dip1", with_overrides(DEFAULT, ["gauss_dip_amp=1"]), offset=0.02)
+    cheap = with_overrides(DEFAULT, ["spin_up_factor=5"])  # the forcing figure simulates each run's reference
+    reference = make_run("baseline", cheap)
+    variant = make_run("dip1", with_overrides(cheap, ["depth=1"]), offset=0.02)
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "forcing_change.png"
         plot_forcing_change(reference, variant, path)
@@ -215,15 +190,15 @@ def test_forcing_change_figure():
 
 def test_the_default_system_is_marked_in_every_sweep_column():
     """Each sweep bends one parameter away from the default, so each column has one level to mark.
-
-    The overlap studies are left out: their default comes from build_reference, which builds the system.
     """
-    assert default_level("total_snr", DEFAULT) == 1 / sum(DEFAULT.variances)
+    assert default_level("total_snr", DEFAULT) == DEFAULT.snr
+    assert default_level("obs_noise", DEFAULT) == 0.1
+    assert default_level("forcing_rotation", DEFAULT) == 0
     assert all(default_level(f"partial_snr_{c}", DEFAULT) == 1.0 for c in ("slow", "pair", "complement"))
-    assert all(default_level(f"slow_timescale_{h}", DEFAULT) == DEFAULT.tau1_yr
+    assert all(default_level(f"slow_timescale_{h}", DEFAULT) == DEFAULT.tau1
                for h in ("snr", "modal_variance"))
     # the line follows the config it is given, not the package default
-    slow50 = with_overrides(DEFAULT, ["tau1_yr=50"])
+    slow50 = with_overrides(DEFAULT, ["tau1=50"])
     assert default_level("slow_timescale_snr", slow50) == 50
 
     # the phase study sweeps two parameters at once, so no single level is the default
