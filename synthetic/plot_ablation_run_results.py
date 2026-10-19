@@ -3,8 +3,11 @@
     python plot_ablation_run_results.py --runs baseline                # figures/ablations/baseline/
     python plot_ablation_run_results.py --runs baseline slow50         # figures/ablations/compare_baseline_vs_slow50/
     python plot_ablation_run_results.py --runs baseline --studies total_snr partial_snr_pair
+    python plot_ablation_run_results.py --runs baseline --metric corr   # forced correlation: *_corr.png
+    python plot_ablation_run_results.py --runs baseline --metric r2     # forced R^2: *_r2.png
 
-results_sweeps.png is one row per evaluation metric, (a) to (c), and one column per ablation study.
+results_sweeps.png is one row per evaluation metric, (a) to (c), and one column per ablation study. Row (a), the
+phase diagrams and the forcing-change panel show --metric: rel_rmse (default), corr or r2 (METRICS).
 The columns are DEFAULT_STUDIES; --studies picks any other selection of SWEEP_STUDIES, left to right.
 
 With several runs the first is the reference: thin dotted medians under the later runs' solid lines and bands.
@@ -37,21 +40,45 @@ FIGURES_DIR = FIGURES_DIR / "ablations"
 SWEEP_STUDIES = {name: study.title for name, study in STUDIES.items() if name != "joint_snr_timescale"}
 
 METHOD_ORDER = ["PullbackDMDc", "LIM", "LIM-opt", "LR"]
-# LIM and LIM-opt fit the same lag-step operator, so their structural scores coincide
-OPERATOR_METHODS = {"PullbackDMDc": "PullbackDMDc", "LIM": "LIM / LIM-opt"}
+# the methods with a fitted propagator; LIM-opt's is never used, on real data or here
+OPERATOR_METHODS = {"PullbackDMDc": "PullbackDMDc", "LIM": "LIM"}
 PAIR_STUDIES = {"partial_snr_pair"}  # studies scored on the oscillating pair rather than the slow mode
 TRUTH_STYLE = dict(color="k", linestyle="--", linewidth=1.2)
 REFERENCE_STYLE = dict(linestyle=":", linewidth=1.1, alpha=0.9)
 VARIANT_LINESTYLES = ["-", "--", "-."]
 DEFAULT_LINE_STYLE = dict(color="0.75", linewidth=0.8, zorder=0)  # marks the default system in a sweep column
-# The phase figure maps one quantity, the forced relative RMSE: shaded by it, contoured in black at the levels
-# below and labelled on the lines, so it carries its own key. The levels are absolute, so one contour means the
-# same error in every panel and panels from different runs can be read against each other. There is no floor
-# from a finite forcing window folded into them: the methods see the whole forcing series, back to where the
-# truth itself starts, so a contour is the method's own error and nothing else.
-PHASE_METRIC, PHASE_LABEL = "forced_rel_rmse", "forced relative RMSE"
-PHASE_CMAP, PHASE_CHANGE_CMAP = "Purples_r", "RdBu_r"
-RMSE_LEVELS = (0.25, 0.5, 0.75, 1.0, 1.5)  # 0.5 is the skill threshold the old single contour marked
+
+
+@dataclass(frozen=True)
+class Metric:
+    """A forced-response skill score: row (a) of the sweeps, the phase diagrams and the forcing-change panel.
+
+    The phase figure is shaded by the score and contoured in black at `levels`, labelled on the lines, so it
+    carries its own key. The levels are absolute, so one contour means the same skill in every panel and panels
+    from different runs can be read against each other.
+    """
+    column: str            # results column
+    label: str
+    levels: tuple
+    cmap: str              # sequential, dark = good
+    higher_is_better: bool
+    note: str              # the footnote's sentence on row (a)
+
+
+METRICS = {
+    "rel_rmse": Metric("forced_rel_rmse", "forced relative RMSE", (0.25, 0.5, 0.75, 1.0, 1.5), "Purples_r", False,
+                       "Row (a) divides by the time-centered RMS of the true forced response, the same $V^{(f)}$ the "
+                       "SNR is built from; its numerator is uncentered, so a constant offset in the estimate still "
+                       "counts."),
+    "corr": Metric("forced_corr", "forced correlation", (0.5, 0.7, 0.8, 0.9, 0.95), "Purples", True,
+                   "Row (a) correlates estimate and truth after centering each latitude over time, so an offset in "
+                   "the level does not count, only the shape."),
+    "r2": Metric("forced_r2", "forced $R^2$", (0, 0.25, 0.5, 0.75, 0.9), "Purples", True,
+                 "Row (a) is $R^2 = 1 - SSE/SST$: the uncentered squared error over the time-centered variance of "
+                 "the true forced response (= 1 - relative RMSE$^2$), so a constant offset counts and values below "
+                 "0 are worse than the truth's own mean."),
+}
+DEFAULT_METRIC = METRICS["rel_rmse"]
 PHASE_SUPTITLE_Y = 1.08  # the figure is one row, so the suptitle has to clear the panel titles
 # the forcing-change figure contrasts a method that uses the dynamics with one that only regresses on
 # the forcing, so a change in the forcing's shape is exactly what should separate them
@@ -180,20 +207,22 @@ class RowSpec:
         return {m: label for m, label in OPERATOR_METHODS.items() if m in run.methods}
 
 
-ROW_SPECS = (
-    RowSpec("(a) forced relative RMSE", "linear", metric="forced_rel_rmse", forced=True),
-    RowSpec("(b) slow-mode decay time\n" + r"$\hat\tau_1$ (yr)", "log", metric_for=spectral_metric,
-            truth="tau1_yr", truth_label=r"true $\tau_1$", note=True),
-    RowSpec("(c) mode shape correlation", "linear", metric_for=shape_metric),
-)
+def row_specs(metric=DEFAULT_METRIC):
+    return (
+        RowSpec(f"(a) {metric.label}", "linear", metric=metric.column, forced=True),
+        RowSpec("(b) slow-mode decay time\n" + r"$\hat\tau_1$ (yr)", "log", metric_for=spectral_metric,
+                truth="tau1_yr", truth_label=r"true $\tau_1$", note=True),
+        RowSpec("(c) mode shape correlation", "linear", metric_for=shape_metric),
+    )
+
+
+ROW_SPECS = row_specs()
 ANNOTATION_HEADROOM = 0.16  # fraction of the y-range left clear above the curves for a panel annotation
 HEADER_INCHES = 0.35        # strip kept clear at the top of the figure for the run legend or suptitle
 FOOTNOTE_FONTSIZE = 7
-FOOTNOTE = ("median over realizations, shaded: interquartile range. Row (a) divides by the time-centered RMS of "
-            "the true forced response, the same $V^{(f)}$ the SNR is built from; its numerator is uncentered, so a "
-            "constant offset in the estimate still counts. Rows (b) and (c) score the eigen-decomposition of the "
-            "fitted lag-step propagator; LIM-opt's forced estimate uses the SVD of its powered propagator, not "
-            r"these modes. Row (b) is the fitted decay time itself against the true $\tau_1$ (dashed), so a curve "
+FOOTNOTE = ("Rows (b) and (c) score the eigen-decomposition of the "
+            "fitted lag-step propagator (PullbackDMDc and LIM; LR and LIM-opt have none, as on real data). "
+            r"Row (b) is the fitted decay time itself against the true $\tau_1$ (dashed), so a curve "
             "above the line is too slow and one below it too fast. Row (c) is the correlation between the fitted "
             "mode's span and the true one -- the cosine of their largest principal angle -- so 1 is exact recovery "
             "of the pattern up to sign and scale; each panel is annotated with the subspace it scores")
@@ -267,7 +296,7 @@ def default_level(study, cfg):
     return None
 
 
-def plot_sweeps(runs, path, studies=None):
+def plot_sweeps(runs, path, studies=None, metric=DEFAULT_METRIC):
     """Write the sweep figure and return the studies it drew, left to right.
 
     One row per metric (ROW_SPECS), one column per study, so a row reads as one quantity across the
@@ -277,12 +306,13 @@ def plot_sweeps(runs, path, studies=None):
     studies = [s for s in (studies or DEFAULT_STUDIES) if any(s in set(r.results.study) for r in runs)]
     if not studies:
         return []
-    n_rows, n_cols = len(ROW_SPECS), len(studies)
+    specs = row_specs(metric)
+    n_rows, n_cols = len(specs), len(studies)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(COLUMN_W * n_cols + LEGEND_INCHES, ROW_H * n_rows),
                              squeeze=False)
     for j, study in enumerate(studies):
         frames = {run.name: run.results[run.results.study == study] for run in runs}
-        for i, spec in enumerate(ROW_SPECS):
+        for i, spec in enumerate(specs):
             ax = axes[i, j]
             if reference is not None and not frames[reference.name].empty:
                 draw_panel(ax, spec, reference, frames[reference.name], study)
@@ -312,11 +342,11 @@ def plot_sweeps(runs, path, studies=None):
                         fontsize=6.5, color="0.35")
         axes[0, j].set_title(SWEEP_STUDIES[study])
         axes[-1, j].set_xlabel(next(f.param_name.iloc[0] for f in frames.values() if not f.empty))
-    for spec, ax in zip(ROW_SPECS, axes[:, 0]):
+    for spec, ax in zip(specs, axes[:, 0]):
         ax.set_ylabel(spec.label)
     # one legend per kind of row, outside the right edge and top-aligned with the first row of its kind
     legend_rows = {}
-    for i, spec in enumerate(ROW_SPECS):
+    for i, spec in enumerate(specs):
         legend_rows.setdefault(spec.forced, i)
     for i in legend_rows.values():
         row_legend(axes[i], loc="upper left", bbox_to_anchor=(1.02, 1.0), frameon=False)
@@ -327,7 +357,8 @@ def plot_sweeps(runs, path, studies=None):
         fig.legend(run_handles, run_labels, loc="upper center", ncol=len(runs), frameon=False)
     else:
         fig.suptitle(variants[0].label())
-    footnote = FOOTNOTE + (PAIR_CLAUSE if any(s in PAIR_STUDIES for s in studies) else "") + "."
+    footnote = ("median over realizations, shaded: interquartile range. " + metric.note + " " + FOOTNOTE
+                + (PAIR_CLAUSE if any(s in PAIR_STUDIES for s in studies) else "") + ".")
     fig.text(0.5, 0.004, footnote, ha="center", fontsize=FOOTNOTE_FONTSIZE, wrap=True)
     header = HEADER_INCHES / fig.get_figheight()
     fig.tight_layout(rect=(0, footnote_height(fig, footnote), legend_rect(fig), 1 - header), h_pad=1.6)
@@ -361,8 +392,8 @@ def label_phase_axes(ax, grid, method):
     return x_centers, y_centers
 
 
-def plot_phase(run, path):
-    """One panel per method: the forced relative RMSE over the SNR x tau_1 grid, shaded and contoured.
+def plot_phase(run, path, metric=DEFAULT_METRIC):
+    """One panel per method: the metric over the SNR x tau_1 grid, shaded and contoured.
 
     The shading and the lines are the same quantity at the same levels, so the labelled contours are the
     colorbar read back onto the panel, and the figure needs no key outside itself.
@@ -372,37 +403,38 @@ def plot_phase(run, path):
         return
     fig, axes = phase_axes(1, len(run.methods))
     for ax, method in zip(axes[0], run.methods):
-        grid = phase_grid(df[df.method == method], PHASE_METRIC)
+        grid = phase_grid(df[df.method == method], metric.column)
         centers = label_phase_axes(ax, grid, method)
         # explicit levels rather than vmin/vmax: every panel shares one scale by construction, and
         # extend="both" still colours the cells that fall outside the ladder
-        filled = ax.contourf(*centers, grid.values, levels=RMSE_LEVELS, cmap=PHASE_CMAP, extend="both")
-        lines = ax.contour(*centers, grid.values, levels=RMSE_LEVELS, colors="k", linewidths=1.0)
+        filled = ax.contourf(*centers, grid.values, levels=metric.levels, cmap=metric.cmap, extend="both")
+        lines = ax.contour(*centers, grid.values, levels=metric.levels, colors="k", linewidths=1.0)
         ax.clabel(lines, fmt="%.2g", fontsize=6.5, inline=True)
         ax.set_xlabel(r"$\tau_1$ (yr)")
     axes[0, 0].set_ylabel("SNR")
-    fig.colorbar(filled, ax=axes[0], ticks=RMSE_LEVELS, label=PHASE_LABEL, fraction=0.03, pad=0.02)
+    fig.colorbar(filled, ax=axes[0], ticks=metric.levels, label=metric.label, fraction=0.03, pad=0.02)
     fig.suptitle(f"{run.label()}\nmedian over realizations", y=PHASE_SUPTITLE_Y)
     save(fig, path, tight=False, bbox="tight")
 
 
-def plot_phase_change(reference, variant, path):
+def plot_phase_change(reference, variant, path, metric=DEFAULT_METRIC):
     ref, var = joint_results(reference), joint_results(variant)
     methods = [m for m in variant.methods if m in reference.methods]
     if ref.empty or var.empty or not methods:
         return
     fig, axes = phase_axes(1, len(methods))
-    # blue = variant better, i.e. lower RMSE. The delta has no fixed ladder to label against -- its range is
-    # a property of the pair of runs -- so it stays a mesh with symmetric limits rather than labelled contours.
-    deltas = {m: phase_grid(var[var.method == m], PHASE_METRIC) - phase_grid(ref[ref.method == m], PHASE_METRIC)
+    # blue = variant better, whichever direction is better for the metric. The delta has no fixed ladder to
+    # label against -- its range is a property of the pair of runs -- so it stays a mesh with symmetric limits.
+    deltas = {m: phase_grid(var[var.method == m], metric.column) - phase_grid(ref[ref.method == m], metric.column)
               for m in methods}
+    cmap = "RdBu" if metric.higher_is_better else "RdBu_r"
     limit = np.nanmax([np.abs(delta.values).max() for delta in deltas.values()]) or 1.0
     for ax, method in zip(axes[0], methods):
-        mesh = ax.pcolormesh(deltas[method].values, cmap=PHASE_CHANGE_CMAP, vmin=-limit, vmax=limit)
+        mesh = ax.pcolormesh(deltas[method].values, cmap=cmap, vmin=-limit, vmax=limit)
         label_phase_axes(ax, deltas[method], method)
         ax.set_xlabel(r"$\tau_1$ (yr)")
     axes[0, 0].set_ylabel("SNR")
-    fig.colorbar(mesh, ax=axes[0], label=f"change in {PHASE_LABEL}", fraction=0.03, pad=0.02)
+    fig.colorbar(mesh, ax=axes[0], label=f"change in {metric.label}", fraction=0.03, pad=0.02)
     fig.suptitle(f"{variant.label(reference)} minus {reference.name}: change in median (blue: better)",
                  y=PHASE_SUPTITLE_Y)
     save(fig, path, tight=False, bbox="tight")
@@ -417,7 +449,7 @@ def standardized(v):
     return (v - v.mean()) / v.std()
 
 
-def plot_forcing_change(reference, variant, path):
+def plot_forcing_change(reference, variant, path, metric=DEFAULT_METRIC):
     """What changing the forcing's shape does: the forcing, the response it drives, and who notices.
 
     The point of the third panel is the contrast between a method that fits the dynamics and one that
@@ -451,13 +483,13 @@ def plot_forcing_change(reference, variant, path):
             continue
         for method in (m for m in FORCING_CHANGE_METHODS if m in set(df.method)):
             if name == reference.name:
-                plot_reference(axes[2], df, "forced_rel_rmse", method)
+                plot_reference(axes[2], df, metric.column, method)
             else:
-                plot_band(axes[2], df, "forced_rel_rmse", method, label=method)
+                plot_band(axes[2], df, metric.column, method, label=method)
     axes[2].set_xscale("log")
     axes[2].grid(alpha=0.3, linewidth=0.5)
     axes[2].set_xlabel("SNR")
-    axes[2].set_ylabel("forced relative RMSE")
+    axes[2].set_ylabel(metric.label)
     axes[2].set_title("(c) total SNR sweep")
     axes[2].legend(loc="upper right", fontsize=7, frameon=False)
 
@@ -565,8 +597,7 @@ def plot_slow_mode_shapes(run, path, studies=None):
              "exact pattern. "
              "Every panel sets its own y scale, so read the shapes within a panel and the numbers, not the "
              "heights, between them. Patterns are unit norm and signed to agree with the truth, so they can "
-             "be averaged over realizations. LIM and LIM-opt fit the same lag-step operator, so their modes "
-             "coincide.", ha="center", va="top", fontsize=7.5, color="0.35", wrap=True)
+             "be averaged over realizations.", ha="center", va="top", fontsize=7.5, color="0.35", wrap=True)
     save(fig, path, tight=False, bbox="tight")
     return studies
 
@@ -576,18 +607,21 @@ def main():
     parser.add_argument("--runs", nargs="+", default=["baseline"], help="run names; the first is the reference")
     parser.add_argument("--studies", nargs="+", default=list(DEFAULT_STUDIES), choices=list(SWEEP_STUDIES),
                         metavar="STUDY", help=f"sweep columns, left to right (default: {' '.join(DEFAULT_STUDIES)})")
+    parser.add_argument("--metric", default="rel_rmse", choices=list(METRICS), help="forced-response skill score")
     args = parser.parse_args()
 
     runs = [load_run(name) for name in args.runs]
     out_dir = FIGURES_DIR / (runs[0].name if len(runs) == 1 else "compare_" + "_vs_".join(r.name for r in runs))
     out_dir.mkdir(parents=True, exist_ok=True)
-    plot_sweeps(runs, out_dir / "results_sweeps.png", studies=args.studies)
+    metric, suffix = METRICS[args.metric], "" if args.metric == "rel_rmse" else f"_{args.metric}"
+    plot_sweeps(runs, out_dir / f"results_sweeps{suffix}.png", studies=args.studies, metric=metric)
     for run in runs:
-        plot_phase(run, out_dir / f"results_phase_snr_timescale_{run.name}.png")
-        plot_slow_mode_shapes(run, out_dir / f"results_slow_mode_shapes_{run.name}.png", studies=args.studies)
+        plot_phase(run, out_dir / f"results_phase_snr_timescale_{run.name}{suffix}.png", metric=metric)
+        if not suffix:  # does not depend on the metric
+            plot_slow_mode_shapes(run, out_dir / f"results_slow_mode_shapes_{run.name}.png", studies=args.studies)
     if len(runs) == 2:
-        plot_phase_change(*runs, out_dir / "results_phase_change.png")
-        plot_forcing_change(*runs, out_dir / "results_forcing_change.png")
+        plot_phase_change(*runs, out_dir / f"results_phase_change{suffix}.png", metric=metric)
+        plot_forcing_change(*runs, out_dir / f"results_forcing_change{suffix}.png", metric=metric)
 
 
 if __name__ == "__main__":

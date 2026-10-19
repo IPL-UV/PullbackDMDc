@@ -18,7 +18,7 @@ from joblib import Parallel, delayed, parallel_backend
 
 from ablations import M, N, STUDIES, make_level, study_levels
 from config import DEFAULT, RESULTS_DIR, config_diff, load_config, to_json
-from methods import make_methods
+from methods import compute_eofs, make_methods
 
 
 def package_versions():
@@ -66,6 +66,15 @@ def centered_rms(a):
     is still penalized.
     """
     return rms(a - a.mean(axis=0))
+
+
+def centered_corr(a, b):
+    """Correlation of two (N, M) fields after removing each column's time mean, vectorized.
+
+    Blind to a constant offset per latitude, where forced_rel_rmse charges it: the two together separate an
+    error in the shape of the forced response from an error in its level.
+    """
+    return np.corrcoef((a - a.mean(axis=0)).ravel(), (b - b.mean(axis=0)).ravel())[0, 1]
 
 
 def plane_cosines(U, V):
@@ -120,17 +129,16 @@ def slow_subspace(eigvecs, index, w1):
     return w1[:, None], eigvecs[:, index].real[:, None]
 
 
-def fitted_slow_mode(A, lam1, w1):
+def fitted_slow_mode(eig, lam1, w1):
     """The fitted slow eigenvector, unit norm and signed to agree with w1, or None when there is none.
 
-    The sign and scale of an eigenvector are arbitrary, so the patterns could not be averaged across
-    realizations without fixing them first; the scalar scores in `score` are invariant to both and do
-    not need this. Recomputing the eigendecomposition rather than returning it from `score` keeps that
-    function's signature, and an eig of a 20x20 matrix is nothing against the fit that produced A.
+    eig is a method's (eigvals, grid-space eigenvectors), or None. The sign and scale of an eigenvector are
+    arbitrary, so the patterns could not be averaged across realizations without fixing them first; the
+    scalar scores in `score` are invariant to both and do not need this.
     """
-    if A is None:
+    if eig is None:
         return None
-    eigvals, eigvecs = np.linalg.eig(A)
+    eigvals, eigvecs = eig
     if not len(real_eigs(eigvals)):
         return None
     _, fitted = slow_subspace(eigvecs, slow_index(eigvals, lam1), w1)
@@ -154,20 +162,23 @@ def save_slow_modes(modes, path):
     np.savez_compressed(path, **arrays)
 
 
-def score(ens, forced_est, A=None, lag=1):
-    """ens is generate_ensemble's dict, the truth. A is the fitted propagator over `lag` steps, so its
-    eigenvalues are compared with the true ones ** lag."""
+def score(ens, forced_est, eig=None, lag=1):
+    """ens is generate_ensemble's dict, the truth. eig is (eigvals, grid-space eigenvectors) of the fitted
+    propagator over `lag` steps, as the real-data scripts read them (model.eigvals, eofs.T @ model.W), so its
+    eigenvalues are compared with the true ones ** lag; None for a method without one."""
     forced, W = ens["forced"], ens["W"]
     lam1, pair_eig = true_eigs(ens)
+    rel_rmse = rms(forced_est - forced) / centered_rms(forced)
     row = dict(
-        forced_corr=np.corrcoef(forced_est.ravel(), forced.ravel())[0, 1],
-        forced_rel_rmse=rms(forced_est - forced) / centered_rms(forced),
+        forced_corr=centered_corr(forced_est, forced),
+        forced_rel_rmse=rel_rmse,
+        forced_r2=1 - rel_rmse ** 2,  # 1 - SSE/SST: SSE uncentered, SST the truth's centered variance
         slow_eig_err=np.nan, slow_tau_yr=np.nan, slow_tau_rel_err=np.nan, slow_tau_log_ratio=np.nan,
         slow_unstable=np.nan, slow_corr=np.nan, slow_angle=np.nan, pair_corr=np.nan, pair_angle=np.nan,
     )
-    if A is None:
+    if eig is None:
         return row
-    eigvals, eigvecs = np.linalg.eig(A)
+    eigvals, eigvecs = eig
     pair = pair_subspace(eigvals, eigvecs, pair_eig ** lag, W[:, 1:3])
     if pair is not None:
         row["pair_corr"], row["pair_angle"] = subspace_corr(*pair), subspace_angle(*pair)
@@ -209,10 +220,11 @@ def run_level(study, level, cfg=DEFAULT):
     spinup = len(ens["y_full"]) - N
     methods = make_methods(cfg)
     for r, data in enumerate(ens["data"]):
+        eofs = compute_eofs(data)  # once per realization, shared by every method (as experiments.py does)
         for name, fit in methods.items():
-            forced_est, A = fit(data, long_forcings, short_forcings, spinup)
-            rows.append(dict(meta, realization=r, method=name, **score(ens, forced_est, A, lag=cfg.lag)))
-            pattern = fitted_slow_mode(A, lam1 ** cfg.lag, w1)
+            forced_est, eig = fit(data, long_forcings, short_forcings, spinup, eofs)
+            rows.append(dict(meta, realization=r, method=name, **score(ens, forced_est, eig, lag=cfg.lag)))
+            pattern = fitted_slow_mode(eig, lam1 ** cfg.lag, w1)
             if pattern is not None:
                 modes.append(dict(mode_meta, realization=r, method=name, pattern=pattern))
     return rows, modes
@@ -251,8 +263,11 @@ def main():
     (out_dir / "provenance.json").write_text(json.dumps(
         {"generator": "synthetic_generator.generate_ensemble", "record_months": N, "state_dim": M,
          "b_scaling": "||y0 (I - A)^-1 B|| = 1",
-         "data": "forced + internal + measurement noise, each centered over the record",
+         "data": "forced + internal + measurement noise, not centered; forcing centered over the record",
+         "methods": "EOFs and data mean per realization (data_preparation/compute_eofs.run_eofs), shared by every method",
          "forced_rel_rmse": "rms(est - true) / centered_rms(true), denominator = sqrt(V_f / M)",
+         "forced_corr": "corrcoef of est and true, each latitude centered over time, then vectorized",
+         "forced_r2": "1 - SSE/SST = 1 - forced_rel_rmse**2 (SSE uncentered, SST centered)",
          "seeds": {name: getattr(cfg, name) for name in ("w_seed", "eig_seed", "noise_seed")},
          "versions": package_versions()},
         indent=2) + "\n")

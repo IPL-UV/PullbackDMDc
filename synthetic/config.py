@@ -24,7 +24,7 @@ class Config:
     tau1: float = 20  # slow mode decay time (yr)
     split: Tuple[float, ...] = (1, 1, 1, 0.9, 0.1)  # variance shares (V_f, slow, pair, noise modes, measurement)
     b_rot: float = 0.0  # fraction of the angle rotating the flat B toward w1; 1: B = w1
-    depth: float = 0.25  # amplitude of the forcing's 1965 dip
+    depth: float = 0.3  # amplitude of the forcing's 1965 dip
     spin_up_factor: float = 100  # spin-up in units of the slowest decay time
     w_seed: int = 22
     eig_seed: int = 20
@@ -44,7 +44,7 @@ class Config:
     b_rots: Tuple[float, ...] = (0, 0.25, 0.5, 0.75, 1)
 
     # --- methods ----------------------------------------------------------------------------
-    lag: int = 3
+    lag: int = 1
     optlag: int = 60  # LIM-opt horizon (months)
     methods: Tuple[str, ...] = ("PullbackDMDc", "LIM", "LIM-opt", "LR")
 

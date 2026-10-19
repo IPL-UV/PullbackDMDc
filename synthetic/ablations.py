@@ -6,7 +6,9 @@ The system itself is synthetic_generator.py's; this module only says how each st
     ens = make_level(cfg, "total_snr", 1)       # the dict generate_ensemble returns
     ens = make_level(cfg)                       # the reference system
 
-Every level draws its noise from cfg.noise_seed, so levels with the same spin-up share their noise draws.
+Every level restarts its noise from cfg.noise_seed, so all levels see the same ensemble members and differ only
+in how the data are generated. The exception is levels with a different spin-up (the tau1 studies): they use up
+a different number of draws before the record starts, so their members are different draws.
 """
 
 from dataclasses import dataclass

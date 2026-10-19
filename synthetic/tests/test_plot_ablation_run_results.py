@@ -6,7 +6,7 @@ import pandas as pd
 
 from ablations import M
 from config import DEFAULT, with_overrides
-from plot_ablation_run_results import (DEFAULT_STUDIES, ROW_SPECS, Run, default_level, median_residual,
+from plot_ablation_run_results import (DEFAULT_STUDIES, METRICS, ROW_SPECS, Run, default_level, median_residual,
                                        plot_forcing_change, plot_phase, plot_phase_change,
                                        plot_slow_mode_shapes, plot_sweeps)
 
@@ -40,6 +40,7 @@ def make_run(name, cfg, offset=0.0):
                     tau1_yr=value if study.startswith("slow_timescale") else cfg.tau1,
                     forced_corr=0.75 + 0.2 * value + shift + offset,
                     forced_rel_rmse=0.8 - 0.3 * value - shift,
+                    forced_r2=1 - (0.8 - 0.3 * value - shift) ** 2,
                     slow_eig_err=0.01 + shift,
                     slow_tau_yr=cfg.tau1 * (1.3 + shift),
                     slow_tau_rel_err=0.35 + shift,
@@ -61,6 +62,7 @@ def make_run(name, cfg, offset=0.0):
                     method=method,
                     forced_corr=0.78 + 0.15 * snr + 0.02 * (tau == 20) + shift + offset,
                     forced_rel_rmse=0.75 - 0.2 * snr - 0.1 * (tau == 20) - shift,
+                    forced_r2=1 - (0.75 - 0.2 * snr - 0.1 * (tau == 20) - shift) ** 2,
                 ))
     return Run(name, cfg, pd.DataFrame(rows), make_modes())
 
@@ -93,10 +95,11 @@ def test_ablation_run_result_figures():
             "phase": pathlib.Path(tmp) / "phase.png",
             "change": pathlib.Path(tmp) / "change.png",
         }
-        plot_sweeps([reference, variant], paths["sweeps"])
-        plot_phase(reference, paths["phase"])
-        plot_phase_change(reference, variant, paths["change"])
-        assert all(path.stat().st_size > 0 for path in paths.values())
+        for metric in METRICS.values():
+            plot_sweeps([reference, variant], paths["sweeps"], metric=metric)
+            plot_phase(reference, paths["phase"], metric=metric)
+            plot_phase_change(reference, variant, paths["change"], metric=metric)
+            assert all(path.stat().st_size > 0 for path in paths.values())
 
 
 def test_sweep_columns_follow_the_studies_asked_for():
@@ -138,6 +141,11 @@ def test_rows_are_the_three_metrics():
     assert ROW_SPECS[1].panel("total_snr", 1) == ("slow_tau_yr", None)
     assert ROW_SPECS[1].truth == "tau1_yr" and ROW_SPECS[1].note
     assert all(spec.truth is None for spec in ROW_SPECS if spec is not ROW_SPECS[1])
+    # row (a) follows the metric; the other rows do not depend on it
+    from plot_ablation_run_results import row_specs
+    corr = row_specs(METRICS["corr"])
+    assert corr[0].metric == "forced_corr" and "correlation" in corr[0].label
+    assert ROW_SPECS[0].metric == "forced_rel_rmse" and corr[1:] == ROW_SPECS[1:]
 
 
 def test_the_study_column_figures_are_laid_out_on_one_grid():

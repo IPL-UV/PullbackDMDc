@@ -8,7 +8,7 @@
     0.1
   ],
   "b_rot": 0.0,
-  "depth": 0.25,
+  "depth": 0.3,
   "spin_up_factor": 100,
   "w_seed": 22,
   "eig_seed": 20,
@@ -57,7 +57,7 @@
     0.75,
     1
   ],
-  "lag": 3,
+  "lag": 1,
   "optlag": 60,
   "methods": [
     "PullbackDMDc",

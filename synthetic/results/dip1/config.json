@@ -57,7 +57,7 @@
     0.75,
     1
   ],
-  "lag": 3,
+  "lag": 1,
   "optlag": 60,
   "methods": [
     "PullbackDMDc",

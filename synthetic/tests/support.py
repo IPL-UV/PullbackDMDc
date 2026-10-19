@@ -4,7 +4,7 @@ import numpy as np
 
 from ablations import M, N
 from config import DEFAULT, with_overrides
-from methods import fit_pullback
+from methods import compute_eofs, fit_pullback
 from run_ablation_studies import centered_rms, rms, slow_index, true_eigs  # noqa: F401  (re-exported)
 from synthetic_generator import generate_ensemble
 
@@ -43,10 +43,11 @@ def recovery_metrics(ens, lag):
     lam1, _ = true_eigs(ens)
     rows = []
     for data in ens["data"]:
-        model = fit_pullback(data, ens["y_full"][:, None], ens["y"][:, None], spinup, lag=lag)
+        model = fit_pullback(data, ens["y_full"][:, None], ens["y"][:, None], spinup, compute_eofs(data), lag=lag)
         forced_est = model.predict()
         rows.append(dict(
-            forced_corr=np.corrcoef(forced_est.ravel(), ens["forced"].ravel())[0, 1],
+            forced_corr=np.corrcoef((forced_est - forced_est.mean(0)).ravel(),
+                                    (ens["forced"] - ens["forced"].mean(0)).ravel())[0, 1],
             forced_err=rms(forced_est - ens["forced"]) / centered_rms(ens["forced"]),
             slow_eig=model.eigvals[slow_index(model.eigvals, lam1 ** lag)].real,
         ))

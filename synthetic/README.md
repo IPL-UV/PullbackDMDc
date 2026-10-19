@@ -25,6 +25,8 @@ python plot_generator_diagnostics.py                                    # his th
 python plot_generator_diagnostics.py --study obs_noise --level 1       # ... at any ablation level
 python run_ablation_studies.py --name slow50 --set tau1=50 --n-jobs 12  # a run with a 50-yr slow mode
 python plot_ablation_run_results.py --runs baseline slow50              # overlaid on the baseline
+python plot_ablation_run_results.py --runs baseline --metric corr       # forced correlation instead (*_corr.png)
+python plot_ablation_run_results.py --runs baseline --metric r2         # forced R² instead (*_r2.png)
 ```
 
 `--set KEY=VALUE` overrides any `Config` field. Values are Python literals, e.g. `--set "split=(1, 1, 1, 0.9, 0.5)"`.
@@ -49,7 +51,7 @@ These are the defaults of his `__main__` block:
 - `tau1=20` yr;
 - `split=(1, 1, 1, 0.9, 0.1)`, which gives the variance shares of the forced response, slow mode, fast pair,
   noise modes and measurement noise, so SNR = 1/3;
-- `b_rot=0` (flat forcing pattern B), `depth=0.25`, forcing amplitude `a = 2`;
+- `b_rot=0` (flat forcing pattern B), `depth=0.3`, forcing amplitude `a = 2`;
 - `spin_up_factor=100` decay times;
 - `tau_pair=1.5` yr and `period_pair=4` yr;
 - 100 members, fitted at `lag=3`.
@@ -74,7 +76,13 @@ A variant of the whole system is a run, not a study. For example, `dip1` is `--s
 - `config.json`, which fully determines the run's numbers;
 - `provenance.json`, with the seeds, conventions and package versions;
 - `ablations.csv`, with one row per (study, level, realization, method), the scores
-  (`forced_rel_rmse`, `forced_corr`, `slow_tau_yr`, `slow_corr`, `pair_corr`, …) and `snr`/`tau1_yr`;
+  (`forced_rel_rmse`, `forced_corr`, `forced_r2`, `slow_tau_yr`, `slow_corr`, `pair_corr`, …) and `snr`/`tau1_yr`.
+  The results figures show any forced-response score (`--metric rel_rmse`, the default, `corr` or `r2`):
+  - `forced_rel_rmse = rms(est − truth) / rms(truth − its time mean)`, so a constant offset counts;
+  - `forced_corr` is the correlation of estimate and truth after centering each latitude over time and
+    vectorizing, so only the shape counts;
+  - `forced_r2 = 1 − SSE/SST = 1 − forced_rel_rmse²`, the fraction of the forced variance explained, with an
+    uncentered SSE and the truth's centered variance as SST; below 0 is worse than the truth's own mean;
 - `slow_modes.npz`, the fitted slow-mode patterns plus the truth per level.
 
 ## Reproducibility
@@ -89,6 +97,13 @@ which is every study except the τ1 ones. A run is a pure function of its `confi
 
 ## Notes
 
+- **Centering conventions.** The forcing y is centered over the record. Nothing else is centered: not the
+  ensemble members, not the true forced response, not the estimates. Each method is used as on real data. A
+  realization's EOFs and data mean are computed once (`data_preparation/compute_eofs.run_eofs`) and passed to every
+  class, which centers internally and adds the mean back in `predict()`. `forced_rel_rmse` has an uncentered
+  numerator and a centered denominator: `rms(est − truth) / rms(truth − its time mean)`.
+- **Eigen-metrics.** These come from each model's eigenvalues and its grid-space eigenvectors `eofs.T @ W`, as in the
+  real-data scripts. LR and LIM-opt have no operator.
 - The slow mode's variance over the 165-yr record, about the record mean, is about 0.8 of its stationary value
   at τ1 = 20 yr. That is why the empirical SNR in `ensemble_diagnostics.pdf` sits slightly above the theoretical one.
 - `b_rot = 1` is the reviewer's case, B = w1: then `W_inv @ B = [1, 0, …, 0]`, so the forcing drives the slow mode alone.

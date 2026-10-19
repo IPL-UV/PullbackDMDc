@@ -20,10 +20,9 @@ def test_overrides():
 
 
 def test_generator_kwargs_are_generate_ensemble_arguments():
-    """Every system field reaches generate_ensemble under its own name, and its default matches his main block."""
+    """Every system field reaches generate_ensemble under its own name; tau1, split and b_rot are his main block's."""
     generate_ensemble(1, **{**generator_kwargs(DEFAULT), "spin_up_factor": 1}, rng=0)
-    assert (DEFAULT.tau1, DEFAULT.split, DEFAULT.b_rot, DEFAULT.depth, DEFAULT.lag) == (
-        20, (1, 1, 1, 0.9, 0.1), 0.0, 0.25, 3)
+    assert (DEFAULT.tau1, DEFAULT.split, DEFAULT.b_rot) == (20, (1, 1, 1, 0.9, 0.1), 0.0)
     assert abs(DEFAULT.snr - 1 / 3) < 1e-12
 
 

@@ -7,12 +7,13 @@ from support import cheap_ensemble
 from synthetic_generator import make_setup
 
 
-def test_data_is_the_sum_of_its_centered_parts():
+def test_data_is_the_sum_of_its_uncentered_parts():
+    """data = forced + internal + obs_noise, with nothing centered: the forced response keeps its record mean."""
     ens = cheap_ensemble(3)
     assert np.abs(ens["data"] - (ens["forced"] + ens["internal"] + ens["obs_noise"])).max() < 1e-12
-    for part in ("data", "forced", "internal", "obs_noise"):
-        assert np.abs(ens[part].mean(axis=-2)).max() < 1e-12, part
-
+    clean = cheap_ensemble(split=(1, 0, 0, 0, 0))  # no noise: data = forced exactly
+    assert np.allclose(clean["data"][0], ens["forced"]) and np.abs(ens["forced"].mean(0)).max() > 1e-2
+    assert np.allclose(ens["data_mean"], ens["data"].mean(axis=1))
 
 def test_variances_match_the_split():
     """Modal variances of the internal variability and the measurement-noise variance, on many members.

@@ -18,6 +18,10 @@ python run_ablation_studies.py --name dip1 --set depth=1 --n-jobs 12
 echo "=== run figures ==="
 python plot_ablation_run_results.py --runs baseline
 python plot_ablation_run_results.py --runs baseline dip1
+python plot_ablation_run_results.py --runs baseline --metric corr
+python plot_ablation_run_results.py --runs baseline dip1 --metric corr
+python plot_ablation_run_results.py --runs baseline --metric r2
+python plot_ablation_run_results.py --runs baseline dip1 --metric r2
 
 echo "=== generator diagnostics ==="
 python plot_generator_diagnostics.py

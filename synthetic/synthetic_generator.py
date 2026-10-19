@@ -16,7 +16,7 @@ Functions
         rng: seed or numpy Generator of the noise realizations (None: unseeded).
         split = (V_f, s1, sp, sc, v): fractions of the total variance in the forced response, slow, fast-pair, noise-mode internal variability and measurement noise; theoretical SNR = split[0] / sum(split[1:]).
         B is scaled so that the quasi-equilibrium forced state at the start of the spin-up has unit norm.
-        Returns a dict: data, forced, internal, obs_noise (all zero-mean per member, data = forced + internal + obs_noise), data_mean, years, y, years_full, y_full, y0, A, W, W_inv, Lambda_R, B, b_scale, modal_var, noise_std, obs_std, Vf, snr, spin_up.
+        Returns a dict: data, forced, internal, obs_noise (none of them centered, data = forced + internal + obs_noise), data_mean, years, y, years_full, y_full, y0, A, W, W_inv, Lambda_R, B, b_scale, modal_var, noise_std, obs_std, Vf, snr, spin_up.
     fit_pullback_ensemble(data, y, y_full, lag)
         Fits the repo's PullbackDMDc to each member separately (full truncation, transition_time = whole spin-up).
         Returns the fitted models and the estimated forced responses (n_members, N, M) from model.predict().
@@ -110,8 +110,8 @@ def generate_ensemble(n_members, tau1, split=(1, 1, 1, 1, 0), b_rot = 0.0, depth
     tau_pair, period_pair : decay time (yr) and period (yr) of the fast (ENSO-like) pair
     rng             : seed or numpy Generator of the noise realizations (None: unseeded)
     Returns a dict (record = Jan 1850 to Dec 2014, N = 1980 monthly steps, M = 20), including the theoretical SNR ('snr').
-    data = forced + internal + obs_noise, all with zero time mean for each member; 'internal' is the process internal
-    variability without the measurement noise.
+    data = forced + internal + obs_noise, none of them centered (the forcing y is centered over the record);
+    'internal' is the process internal variability without the measurement noise.
     """
     M = 20
     rng = np.random.default_rng(rng)
@@ -164,11 +164,8 @@ def generate_ensemble(n_members, tau1, split=(1, 1, 1, 1, 0), b_rot = 0.0, depth
 
     internal = data - forced                                  # process internal variability (without measurement noise)
     obs = sigma_obs * rng.standard_normal(data.shape)       # measurement noise, added to the process data
-    data_mean = (data + obs).mean(axis=1, keepdims=True)      # one common mean per member (over the record)
-    forced = forced - forced.mean(axis=0)                     # all components are mean-centered over the record
-    internal = internal - internal.mean(axis=1, keepdims=True)
-    obs = obs - obs.mean(axis=1, keepdims=True)
-    data = forced + internal + obs                            # measured data, mean-centered (= raw data - data_mean)
+    data = data + obs                                         # measured data, not centered (data = forced + internal + obs)
+    data_mean = data.mean(axis=1, keepdims=True)              # record mean of each member (diagnostic)
     return dict(data=data, forced=forced, internal=internal, obs_noise=obs, data_mean=data_mean[:, 0, :],
                 years=years[n_spin:], y=y[n_spin:], years_full=years, y_full=y, y0=y0,
                 A=A, W=W, W_inv=W_inv, Lambda_R=L, B=B, b_scale=b_scale,
@@ -185,7 +182,7 @@ def fit_pullback_ensemble(data, y, y_full, lag=3):
     lag    : lag of the fit in months (3 in the paper)
     Full truncation (M EOFs) and transition_time = n_spin = len(y_full) - N.
     Returns the list of fitted models (compute_modes already called) and forced_est (n_members, N, M) =
-    forced PCs @ EOFs, without the data mean added back by predict()."""
+    forced PCs @ EOFs + data mean (model.predict())."""
     n_members, N, M = data.shape
     n_spin = len(y_full) - N
     if not np.allclose(y_full[-N:], y):

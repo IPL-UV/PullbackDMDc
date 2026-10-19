@@ -16,7 +16,7 @@ OPERATOR_KEYS = ("slow_eig_err", "slow_tau_yr", "slow_tau_rel_err", "slow_tau_lo
 
 def test_score_matches_known_solution():
     ens = cheap_ensemble()
-    row = score(ens, ens["forced"], ens["A"])
+    row = score(ens, ens["forced"], eig(ens["A"]))
     assert abs(row["forced_corr"] - 1) < 1e-12 and row["forced_rel_rmse"] < 1e-12
     assert row["slow_eig_err"] < 1e-10 and row["slow_tau_rel_err"] < 1e-8 and row["slow_tau_log_ratio"] < 1e-8
     assert abs(row["slow_tau_yr"] - DEFAULT.tau1) < 1e-6, row["slow_tau_yr"]   # reported in years
@@ -25,7 +25,7 @@ def test_score_matches_known_solution():
     assert 1 - row["slow_corr"] < 1e-12 and 1 - row["pair_corr"] < 1e-9, row
     no_operator = score(ens, ens["forced"])
     assert all(np.isnan(no_operator[k]) for k in OPERATOR_KEYS)
-    row = score(ens, ens["forced"], np.linalg.matrix_power(ens["A"], 3), lag=3)
+    row = score(ens, ens["forced"], eig(np.linalg.matrix_power(ens["A"], 3)), lag=3)
     assert row["slow_eig_err"] < 1e-10 and row["slow_tau_rel_err"] < 1e-8
     assert abs(row["slow_tau_yr"] - DEFAULT.tau1) < 1e-6, row["slow_tau_yr"]   # and lag-invariant
     assert row["slow_angle"] < 1e-6 and row["pair_angle"] < 1e-5, row
@@ -45,6 +45,32 @@ def test_rel_rmse_denominator_is_the_snr_variance():
     assert abs(centered_rms(ens["forced"] + 3.0) / centered_rms(ens["forced"]) - 1) < 1e-12
     # ...and must still be charged to the estimate through the uncentered numerator
     assert score(ens, ens["forced"] + 3.0)["forced_rel_rmse"] > 1
+
+
+def test_forced_r2_is_one_minus_rel_rmse_squared():
+    """R^2 = 1 - SSE/SST: 1 for an exact estimate, below 0 once the error exceeds the forced variance."""
+    ens = cheap_ensemble()
+    assert abs(score(ens, ens["forced"])["forced_r2"] - 1) < 1e-12
+    noisy = ens["forced"] + 0.3 * ens["internal"][0]
+    row = score(ens, noisy)
+    assert abs(row["forced_r2"] - (1 - row["forced_rel_rmse"] ** 2)) < 1e-12 and row["forced_r2"] < 1
+    assert score(ens, ens["forced"] + 3.0)["forced_r2"] < 0  # an offset counts, unlike in forced_corr
+
+
+def test_forced_corr_is_blind_to_offsets_per_latitude():
+    """forced_corr centers each latitude over time first, so a constant or per-latitude offset leaves it at 1."""
+    ens = cheap_ensemble()
+    offsets = np.linspace(-2, 2, M)
+    for shifted in (ens["forced"] + 3.0, ens["forced"] + offsets):
+        row = score(ens, shifted)
+        assert abs(row["forced_corr"] - 1) < 1e-12 and row["forced_rel_rmse"] > 1, row
+    # a per-latitude offset is not a uniform one: a plain corrcoef of the raveled fields would see it
+    assert np.corrcoef((ens["forced"] + offsets).ravel(), ens["forced"].ravel())[0, 1] < 1 - 1e-3
+
+
+def eig(A):
+    """(eigvals, eigenvectors) of a grid-space propagator: what a method hands to score."""
+    return np.linalg.eig(A)
 
 
 def propagator(ens, W=None, lam1=None):
@@ -74,20 +100,20 @@ def test_slow_mode_shape_score_is_invariant_to_sign_and_scale():
     """
     ens = cheap_ensemble()
     A = propagator(ens, W=tilted_slow_mode(ens))
-    row = score(ens, ens["forced"], A)
+    row = score(ens, ens["forced"], eig(A))
     angle, corr = row["slow_angle"], row["slow_corr"]
     assert 1 < angle < 89, angle
     assert abs(corr - np.cos(np.deg2rad(angle))) < 1e-12, row
     for factor in (-3.0, 0.1):
         rescaled = {**ens, "W": ens["W"] * np.array([factor] + [1.0] * (M - 1))}
-        moved = score(rescaled, ens["forced"], A)
+        moved = score(rescaled, ens["forced"], eig(A))
         assert abs(moved["slow_angle"] - angle) < 1e-9 and abs(moved["slow_corr"] - corr) < 1e-12
 
 
 def test_non_decaying_fit_is_counted_not_scored():
     """A propagator with |lambda_1| > 1 has no decay time: the tau metrics are nan and the fit is flagged."""
     ens = cheap_ensemble()
-    row = score(ens, ens["forced"], propagator(ens, lam1=1.01))
+    row = score(ens, ens["forced"], eig(propagator(ens, lam1=1.01)))
     assert row["slow_unstable"] == 1
     assert np.isnan(row["slow_tau_yr"]) and np.isnan(row["slow_tau_rel_err"])
     assert np.isnan(row["slow_tau_log_ratio"])
@@ -98,7 +124,7 @@ def test_tau_log_ratio_is_symmetric_in_over_and_underestimates():
     """Halving and doubling tau_1 are the same error on the log ratio, unlike the relative error."""
     ens = cheap_ensemble()
     tau1 = decay_time(true_eigs(ens)[0])
-    rows = [score(ens, ens["forced"], propagator(ens, lam1=np.exp(-1 / (factor * tau1))))
+    rows = [score(ens, ens["forced"], eig(propagator(ens, lam1=np.exp(-1 / (factor * tau1)))))
             for factor in (0.5, 2.0)]
     assert abs(rows[0]["slow_tau_log_ratio"] - rows[1]["slow_tau_log_ratio"]) < 1e-9
     assert np.allclose([r["slow_tau_rel_err"] for r in rows], [0.5, 1.0], atol=1e-9)
@@ -124,13 +150,13 @@ def test_run_level_persists_slow_mode_patterns():
     assert abs(np.linalg.norm(truth[0]["pattern"]) - 1) < 1e-12
 
     fits = [m for m in modes if m["method"] != "truth"]
-    assert {m["method"] for m in fits} == {"PullbackDMDc", "LIM", "LIM-opt"}, "LR has no propagator"
+    assert {m["method"] for m in fits} == {"PullbackDMDc", "LIM"}, "LR and LIM-opt have no propagator"
     for m in fits:
         assert abs(np.linalg.norm(m["pattern"]) - 1) < 1e-12
         assert m["pattern"] @ truth[0]["pattern"] >= 0, "patterns are signed to agree with the truth"
         assert m["study"] == "obs_noise" and m["param_value"] == 0.5
     # every row of the CSV that has a propagator also has a pattern, so the two files stay aligned
-    assert len(fits) == len([r for r in rows if r["method"] in {"PullbackDMDc", "LIM", "LIM-opt"}])
+    assert len(fits) == len([r for r in rows if r["method"] in {"PullbackDMDc", "LIM"}])
 
 
 def test_save_slow_modes_round_trips_without_pickle():
