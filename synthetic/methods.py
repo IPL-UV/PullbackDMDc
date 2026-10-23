@@ -4,7 +4,7 @@ The EOFs and data mean of a realization are computed once (data_preparation/comp
 and passed to every method as precomputed_eofs, as experiments.py does; each class then centers, fits and adds the
 mean back in predict() as it does on real data.
 
-make_methods(cfg) binds cfg.lag and cfg.optlag. Each fit returns (forced_est (N, M), modes), where modes is
+make_methods(cfg) binds cfg.lag and cfg.optlag. Each fit returns (forced_est (T, M), modes), where modes is
 (eigvals, grid-space eigenvectors eofs.T @ W) of the fitted lag-step propagator, or None for methods without one
 (LR, and LIM-opt, whose operator the real-data pipeline never uses).
 """

@@ -1,35 +1,35 @@
 """
 Diagnostic figures of the synthetic ensemble (synthetic_generator.py) and of PullbackDMDc fitted to it.
 
-    python plot_generator_diagnostics.py                                        # figures/generator/default/
-    python plot_generator_diagnostics.py --set depth=1
+    python plot_generator_diagnostics.py                                        # figures/generator/delta0.15/
+    python plot_generator_diagnostics.py --set delta=0.5                        # figures/generator/delta0.5/
     python plot_generator_diagnostics.py --study obs_noise --level 1            # any ablation level
 
 Functions
-    plot_setup(b_rot, depth, spin_up, seed, fig_dir)
-        Patterns (slow, fast, B), noise modes and the forcing with the spin-up and training interval; prints y0 and W^T W; saves fig_dir/setup.pdf.
-    plot_ensemble_diagnostics(out, area_weighted, fig_dir)
-        (a) global-mean time series of the data and the forced response, (b) histogram over members of the empirical SNR vs the theoretical one, (c) empirical vs theoretical modal variances of the internal variability; saves fig_dir/ensemble_diagnostics.pdf.
+    plot_setup(spin_up, seed, deltas, fig_dir)
+        (a) the slow and fast patterns with the uniform forcing pattern b0, (b) the forcing for each dip depth delta (solid, then dotted)
+        from 1750, with the end of the spin-up and the training interval; prints W^T W; saves fig_dir/setup.pdf.
     plot_pullback_results(out, models, forced_est, area_weighted, fig_dir)
-        (a) global-mean true and estimated forced responses with the ensemble mean, (b) histogram of the normalized MSE of the forced response per member, (c) estimated vs true decay times (years), (d) estimated vs true slow-mode pattern; prints the percentage of members with a slowest |eigenvalue| > 1; saves fig_dir/pullback_results.pdf.
+        (a) global-mean true and estimated forced responses with the ensemble mean, (b) histogram of the normalized MSE of the forced response per member, (c) estimated vs true decay times (years), (d) estimated vs true slow-mode pattern, the slow mode being the largest real eigenvalue; prints the number of members dropped from (d) because it does not decay; saves fig_dir/pullback_results.pdf.
 """
 
 import argparse
 import ast
+from dataclasses import replace
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import LogLocator, NullLocator, ScalarFormatter
 
 from ablations import find_level, level_kwargs, make_level
-from config import FIGURES_DIR, load_config, slug
+from config import DEFAULT, FIGURES_DIR, load_config, run_name, slug
+from run_ablation_studies import decaying, slow_index
 from synthetic_generator import fit_pullback_ensemble, make_setup
 
-FIG_DIR = FIGURES_DIR / "generator" / "default"
+FIG_DIR = FIGURES_DIR / "generator" / run_name(DEFAULT)
+SETUP_DELTAS = (0.15, 0.5)  # the two dip depths every experiment is run at
 
-def plot_setup(b_rot=0.0, depth=0.25, spin_up=100, seed=22, fig_dir=FIG_DIR):
-    W, W_inv, B, years, y, y0 = make_setup(spin_up, seed=seed, b_rot=b_rot, depth=depth)
-    print("y0 =", y0)
+def plot_setup(spin_up=100, seed=22, deltas=SETUP_DELTAS, fig_dir=FIG_DIR):
+    W, W_inv, b0, years, y, y0 = make_setup(spin_up, seed=seed)
     print("Uncentered correlation matrix of the eigenvectors (W^T W):")
     print(np.array2string(np.round(W.T @ W, 2) + 0.0, precision=2, max_line_width=250))
 
@@ -38,9 +38,9 @@ def plot_setup(b_rot=0.0, depth=0.25, spin_up=100, seed=22, fig_dir=FIG_DIR):
     patterns = [(W[:, 0], "slow mode", "#0072B2", "o", "-"),
                 (W[:, 1], "fast mode 1", "#D55E00", "o", "-"),
                 (W[:, 2], "fast mode 2", "#009E73", "o", "-"),
-                (B, "forcing pattern B", "k", "o", "--")]
+                (b0 / np.linalg.norm(b0), "uniform forcing pattern $b_0$", "k", "o", "--")]
 
-    fig, (ax1, axn, ax2) = plt.subplots(3, 1, figsize=(7, 10))  
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 6.7))
 
     # (a) patterns, unit norm
     for v, label, color, marker, ls in patterns:
@@ -55,115 +55,47 @@ def plot_setup(b_rot=0.0, depth=0.25, spin_up=100, seed=22, fig_dir=FIG_DIR):
     ax1.legend(ncol=4, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=9)
     ax1.text(0.0, 1.12, "(a)", transform=ax1.transAxes, fontsize=11, fontweight="bold")
 
-    # (b) noise modes (columns 3..n-1 of W), slow mode dashed for reference                  
-    for k in range(3, n):                                                                      
-        axn.plot(lat, W[:, k], color="0.45", lw=0.9, alpha=0.7, marker="o", ms=2.5,            
-                 label=f"noise modes ({n - 3})" if k == 3 else None)                           
-    axn.plot(lat, W[:, 0], color="#0072B2", ls="--", lw=1.6, label="slow mode")                
-    axn.axhline(0, color="0.6", lw=0.8)                                                        
-    axn.set_xticks(np.arange(-90, 91, 30))                                                     
-    axn.set_xticklabels(["90S", "60S", "30S", "0", "30N", "60N", "90N"])                       
-    axn.set_xlabel("Latitude")                                                                 
-    axn.set_ylabel("Loading (unit norm)")                                                      
-    axn.legend(ncol=2, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=9)   
-    axn.text(0.0, 1.12, "(b)", transform=axn.transAxes, fontsize=11, fontweight="bold")        
-
-    # (c) forcing on the full interval, spin-up and training interval marked                   
-    ax2.axvspan(years[0], 1850, color="0.5", alpha=0.12, lw=0)
+    # (b) forcing for each dip depth, from the last century of the spin-up: the full spin-up is hundreds to
+    # thousands of years of an almost constant forcing, and would squeeze the dips the panel compares into a sliver
+    start = max(years[0], 1750.0)
+    ax2.axvspan(start, 1850, color="0.5", alpha=0.12, lw=0)
     ax2.axvspan(1850, years[-1], color="#0072B2", alpha=0.10, lw=0)
     ax2.axvline(1850, color="k", ls="--", lw=0.8)
-    ax2.plot(years, y, color="k", lw=1.7)
+    for delta, ls in zip(deltas, ("-", ":", "-.")):
+        y_delta = make_setup(spin_up, seed=seed, delta=delta)[4]
+        ax2.plot(years, y_delta, color="k", ls=ls, lw=1.7, label=rf"$\delta = {delta:g}$")
     ax2.axhline(0, color="0.6", lw=0.8)
-    ax2.axhline(y0, color="#D55E00", ls=":", lw=1.2)
-    ax2.text(years[-1], y0 + 0.04, f"y0 = {y0:.4f}", color="#D55E00", ha="right", va="bottom")
-    ax2.text((years[0] + 1850) / 2, 1.0, f"spin-up ({spin_up:g} yr)", ha="center", color="0.3")
-    ax2.text((1850 + years[-1]) / 2, 1.0, "training interval 1850-2014", ha="center", color="0.3")
-    ax2.set_xlim(years[0], years[-1])
-    ax2.set_ylim(-0.8, 1.45)
+    top = ax2.get_xaxis_transform()                          # x in years, y in axes fraction
+    ax2.text((start + 1850) / 2, 0.93, f"spin-up ({spin_up:g} yr)", ha="center", color="0.3", transform=top)
+    ax2.text((1850 + years[-1]) / 2, 0.93, "training interval 1850-2014", ha="center", color="0.3", transform=top)
+    ax2.set_xlim(start, years[-1])
+    shown = years >= start
+    lo, hi = min(make_setup(spin_up, seed=seed, delta=d)[4][shown].min() for d in deltas), y[shown].max()
+    lo, hi = lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo)
+    ax2.set_ylim(lo, hi + 0.25 * (hi - lo))                  # room for the interval labels
     ax2.set_xlabel("Year")
     ax2.set_ylabel("Forcing y(t)")
-    ax2.text(0.0, 1.05, "(c)", transform=ax2.transAxes, fontsize=11, fontweight="bold")   # CHANGED: (b) -> (c)
+    ax2.legend(ncol=len(deltas), frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=9)
+    ax2.text(0.0, 1.12, "(b)", transform=ax2.transAxes, fontsize=11, fontweight="bold")
 
-    for ax in (ax1, axn, ax2):                                                                 
+    for ax in (ax1, ax2):
         ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     plt.savefig(fig_dir / "setup.pdf", bbox_inches="tight")
     plt.close(fig)
 
-def plot_ensemble_diagnostics(out, area_weighted=True, fig_dir=FIG_DIR):
-    """(a) global-mean time series of the data (all members) and of the forced response,
-    (b) histogram over members of the empirical SNR, with the theoretical SNR (internal variability + measurement noise),
-    (c) empirical variances of the internal variability projected onto the modes (W_inv) vs the theoretical ones.
-    out: dict returned by generate_ensemble. area_weighted: cos(latitude) weights for the global mean."""
-    data, forced, internal = out["data"], out["forced"], out["internal"]
-    years, W_inv, s2, Vf = out["years"], out["W_inv"], out["modal_var"], out["Vf"]
-    n_members, N, M = data.shape
-    lat = np.linspace(-90, 90, M)                            # same grid as in make_setup
-    w = np.cos(np.deg2rad(lat)) if area_weighted else np.ones(M)
-    w = w / w.sum()
-
-    # (a) global means
-    gm_data, gm_forced = data @ w, forced @ w
-
-    # (b) SNR: exact forced variance / empirical non-forced variance (internal + measurement noise, summed over grid points)
-    snr_emp = Vf / (data - forced).var(axis=1).sum(axis=1)                      
-    snr_th = out["snr"]                                                         
-
-    # (c) modal variances of the internal variability, z = W_inv x
-    z_var = (internal @ W_inv.T).var(axis=1)                 # (n_members, M)
-    modes = np.arange(1, M + 1)
-
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(7, 10))
-
-    for m in range(n_members):
-        ax1.plot(years, gm_data[m], color="#0072B2", lw=0.6, alpha=0.6,
-                 label="ensemble members" if m == 0 else None)
-    ax1.plot(years, gm_forced, color="k", lw=2, label="forced response")
-    ax1.set_xlim(years[0], years[-1])
-    ax1.set_xlabel("Year")
-    ax1.set_ylabel("Global mean" if area_weighted else "Mean over latitudes")
-    ax1.legend(ncol=2, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=9)
-    ax1.text(0.0, 1.12, "(a)", transform=ax1.transAxes, fontsize=11, fontweight="bold")
-
-    ax2.hist(snr_emp, bins="auto", color="#0072B2", alpha=0.7, edgecolor="white")                       
-    ax2.axvline(snr_emp.mean(), color="#0072B2", ls=":", lw=1.4, label=f"empirical mean = {snr_emp.mean():.3f}")   
-    ax2.axvline(snr_th, color="#D55E00", ls="--", lw=1.5, label=f"theoretical = {snr_th:.3f}")                    
-    ax2.set_xlabel("SNR")                                                                                         
-    ax2.set_ylabel("Number of members")                                                                           
-    ax2.legend(ncol=2, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=8)
-    ax2.text(0.0, 1.12, "(b)", transform=ax2.transAxes, fontsize=11, fontweight="bold")
-
-    for m in range(n_members):
-        ax3.plot(modes, z_var[m], "o", color="0.55", ms=3, alpha=0.6,
-                 label="members" if m == 0 else None)
-    ax3.plot(modes, z_var.mean(axis=0), "ko", ms=5, label="ensemble mean")
-    ax3.plot(modes, s2, "D", color="#D55E00", mfc="none", ms=7, label="theoretical")
-    ax3.set_yscale("log")
-    ax3.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))       # readable ticks on the log axis
-    ax3.yaxis.set_major_formatter(ScalarFormatter())
-    ax3.yaxis.set_minor_locator(NullLocator())
-    ax3.set_xticks(modes)
-    ax3.set_xlabel("Mode (1: slow, 2-3: fast pair, 4-20: noise)")
-    ax3.set_ylabel("Variance of internal variability")
-    ax3.legend(ncol=3, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=9)
-    ax3.text(0.0, 1.12, "(c)", transform=ax3.transAxes, fontsize=11, fontweight="bold")
-
-    for ax in (ax1, ax2, ax3):
-        ax.spines[["top", "right"]].set_visible(False)
-    fig.tight_layout()
-    plt.savefig(fig_dir / "ensemble_diagnostics.pdf", bbox_inches="tight")
-    plt.close(fig)
-
 def plot_pullback_results(out, models, forced_est, area_weighted=True, fig_dir=FIG_DIR):
-    """(a) global-mean true and estimated forced responses, (b) histogram over members of the forced-response
-    MSE (error accumulated over grid nodes / variance accumulated over grid nodes), (c) estimated decay times vs
-    the true ones, (d) estimated slowest-mode pattern vs the true slow pattern.
+    """(a) global-mean true and estimated forced responses, (b) histogram over members of the normalized MSE of the
+    forced response, (1 / (T V_f)) sum_t ||x_hat^(f)(t) - x^(f)(t)||^2, (c) estimated decay times vs the true ones,
+    (d) estimated slow-mode pattern vs the true slow pattern.
     out: dict from generate_ensemble; models, forced_est: from fit_pullback_ensemble.
     The true and estimated forced responses are compared as they are (no mean removal). Decay times are in years.
     The ensemble mean of out["data"] is shown as a benchmark estimate of the forced response.
-    Prints the percentage of members whose slowest estimated eigenvalue has |lambda| > 1."""
+    The estimated slow mode is the largest real eigenvalue (run_ablation_studies.slow_index, the rule the ablations
+    are scored with); members where it does not decay (>= 1, or no positive real eigenvalue) are dropped from (d)
+    and counted."""
     forced, years, W, A = out["forced"], out["years"], out["W"], out["A"]
-    n_members, N, M = forced_est.shape
+    n_members, T, M = forced_est.shape
     lat = np.linspace(-90, 90, M)                            # same grid as in make_setup
     w = np.cos(np.deg2rad(lat)) if area_weighted else np.ones(M)
     w = w / w.sum()
@@ -171,9 +103,10 @@ def plot_pullback_results(out, models, forced_est, area_weighted=True, fig_dir=F
     tr, est = forced, forced_est
     ens_mean = out["data"].mean(axis=0)                      
 
-    # (b) per-member normalized MSE
-    nmse = ((est - tr) ** 2).mean(1).sum(-1) / tr.var(0).sum()
-    nmse_em = ((ens_mean - tr) ** 2).mean(0).sum() / tr.var(0).sum()        
+    # (b) per-member normalized MSE: squared error summed over time and grid nodes, over T V_f
+    Vf = out["Vf"]                                           # sum over grid nodes of the time variance of x^(f)
+    nmse = ((est - tr) ** 2).sum(axis=(1, 2)) / (T * Vf)
+    nmse_em = ((ens_mean - tr) ** 2).sum() / (T * Vf)        
 
     # (c) decay times (years) sorted by |lambda|, from the lag-step eigenvalues of each fit and from the true monthly A
     def decay_years(eigvals, lag):
@@ -183,18 +116,21 @@ def plot_pullback_results(out, models, forced_est, area_weighted=True, fig_dir=F
     lag = models[0].lag
     T_est = np.array([decay_years(m.eigvals, lag) for m in models])
     T_true = decay_years(np.linalg.eigvals(A), 1)
-    pct = 100 * np.mean([np.abs(m.eigvals[0]) > 1 for m in models])    # eigvals are sorted by |lambda|: eigvals[0] is the slowest
-    print(f"Members with the slowest |eigenvalue| > 1: {pct:.1f}%")
 
-    # (d) slowest-mode patterns, unit norm, sign aligned with the true slow pattern
+    # (d) slow-mode patterns: the eigenvector of the largest real eigenvalue, unit norm, sign aligned with the
+    # true slow pattern; members whose largest real eigenvalue does not decay are dropped
     true_pat = W[:, 0] / np.linalg.norm(W[:, 0])
     pats = []
     for m in models:
-        v = m.modes[:, 0]
-        v = v * np.exp(-1j * np.angle(v[np.argmax(np.abs(v))]))
-        v = v.real / np.linalg.norm(v.real)
-        pats.append(v * np.sign(v @ true_pat))
-    pats = np.array(pats)
+        index = slow_index(m.eigvals)
+        if index is None or not decaying(m.eigvals[index].real):
+            continue
+        v = m.modes[:, index].real                           # eigenvector of a real eigenvalue: real up to roundoff
+        v = v / np.linalg.norm(v)
+        pats.append(v * (np.sign(v @ true_pat) or 1.0))
+    pats = np.array(pats).reshape(-1, M)
+    n_dropped = n_members - len(pats)
+    print(f"Members dropped from (d), largest real eigenvalue >= 1 or none > 0: {n_dropped} of {n_members}")
     cosines = pats @ true_pat
 
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
@@ -216,7 +152,7 @@ def plot_pullback_results(out, models, forced_est, area_weighted=True, fig_dir=F
     ax2.axvline(np.median(nmse), color="k", ls="--", lw=1.2, label=f"median = {np.median(nmse):.2f}")
     ax2.axvline(nmse_em, color="#D55E00", ls="--", lw=1.5, label=f"ensemble mean = {nmse_em:.2f}")   
     ax2.axvline(1, color="0.5", ls=":", lw=1.4, label="error variance = forced variance")
-    ax2.set_xlabel("Normalized MSE of the forced response")
+    ax2.set_xlabel(r"Normalized MSE $\frac{1}{T\,V_f}\sum_t \|\hat{x}^{(f)}(t) - x^{(f)}(t)\|^2$")
     ax2.set_ylabel("Number of members")
     ax2.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, fontsize=8)
     ax2.text(0.0, 1.12, "(b)", transform=ax2.transAxes, fontsize=11, fontweight="bold")
@@ -233,9 +169,11 @@ def plot_pullback_results(out, models, forced_est, area_weighted=True, fig_dir=F
     ax3.legend(ncol=3, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=9)
     ax3.text(0.0, 1.12, "(c)", transform=ax3.transAxes, fontsize=11, fontweight="bold")
 
-    for m in range(n_members):
-        ax4.plot(lat, pats[m], color="#0072B2", lw=0.6, alpha=0.5, label="estimated (each member)" if m == 0 else None)
-    ax4.plot(lat, true_pat, color="k", lw=2, marker="o", ms=4, label=f"true slow pattern (median |cos| = {np.median(np.abs(cosines)):.2f})")
+    for m in range(len(pats)):
+        ax4.plot(lat, pats[m], color="#0072B2", lw=0.6, alpha=0.5,
+                 label=f"estimated (each member; {n_dropped} non-decaying dropped)" if m == 0 else None)
+    median_cos = f"{np.median(np.abs(cosines)):.2f}" if len(pats) else "n/a"
+    ax4.plot(lat, true_pat, color="k", lw=2, marker="o", ms=4, label=f"true slow pattern (median |cos| = {median_cos})")
     ax4.axhline(0, color="0.6", lw=0.8)
     ax4.set_xticks(np.arange(-90, 91, 30))
     ax4.set_xticklabels(["90S", "60S", "30S", "0", "30N", "60N", "90N"])
@@ -262,18 +200,19 @@ def main():
     cfg = load_config(args)
     level = find_level(cfg, args.study, args.level) if args.study else None
     kwargs = level_kwargs(cfg, args.study, level)
-    fig_dir = FIGURES_DIR / "generator" / (slug(cfg) + (f"__{args.study}={level}" if args.study else ""))
+    # by dip depth, plus any other departure from the defaults so that variants do not overwrite it
+    others = slug(replace(cfg, delta=DEFAULT.delta))
+    fig_dir = FIGURES_DIR / "generator" / (run_name(cfg) + ("" if others == "default" else f"__{others}")
+                                           + (f"__{args.study}={level}" if args.study else ""))
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     ens = make_level(cfg, args.study, level)
     fitted_models, fr_estimations = fit_pullback_ensemble(ens["data"], ens["y"], ens["y_full"], lag=cfg.lag)
-    split = kwargs["split"]
-    print("Check SNR in the output: ", ens["snr"], "=", split[0] / sum(split[1:]))
-    plot_setup(b_rot=kwargs["b_rot"], depth=kwargs["depth"], spin_up=ens["spin_up"], seed=kwargs["w_seed"],
-               fig_dir=fig_dir)
-    plot_ensemble_diagnostics(ens, fig_dir=fig_dir)
+    variances = kwargs["variances"]
+    print("Check SNR in the output: ", ens["snr"], "=", variances[0] / sum(variances[1:]))
+    plot_setup(spin_up=ens["spin_up"], seed=kwargs["w_seed"], fig_dir=fig_dir)
     plot_pullback_results(ens, fitted_models, fr_estimations, fig_dir=fig_dir)
-    print(f"saved {fig_dir}/setup.pdf, ensemble_diagnostics.pdf, pullback_results.pdf")
+    print(f"saved {fig_dir}/setup.pdf, pullback_results.pdf")
 
 
 if __name__ == "__main__":

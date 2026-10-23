@@ -20,14 +20,14 @@ def test_overrides():
 
 
 def test_generator_kwargs_are_generate_ensemble_arguments():
-    """Every system field reaches generate_ensemble under its own name; tau1, split and b_rot are his main block's."""
+    """Every system field reaches generate_ensemble under its own name; tau1, variances, delta and alpha are the reference's."""
     generate_ensemble(1, **{**generator_kwargs(DEFAULT), "spin_up_factor": 1}, rng=0)
-    assert (DEFAULT.tau1, DEFAULT.split, DEFAULT.b_rot) == (20, (1, 1, 1, 0.9, 0.1), 0.0)
+    assert (DEFAULT.tau1, DEFAULT.variances, DEFAULT.delta, DEFAULT.alpha) == (20, (1, 1, 1, 0.9, 0.1), 0.15, 0.0)
     assert abs(DEFAULT.snr - 1 / 3) < 1e-12
 
 
 def test_config_json_roundtrip():
-    cfg = with_overrides(DEFAULT, ["tau1=50", "split=[1, 2, 1, 1, 0]", "lag=1"])
+    cfg = with_overrides(DEFAULT, ["tau1=50", "variances=[1, 2, 1, 1, 0]", "lag=1"])
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "config.json"
         to_json(cfg, path)

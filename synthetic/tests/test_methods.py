@@ -1,6 +1,6 @@
 import numpy as np
 
-from ablations import M, N
+from ablations import M, T
 from config import DEFAULT, with_overrides
 from methods import compute_eofs, fit_pullback_dmdc, make_methods
 from run_ablation_studies import score
@@ -9,13 +9,13 @@ from support import cheap_ensemble, noise_free_white_forcing, true_eigs
 
 def test_fit_methods_shapes():
     ens = cheap_ensemble()
-    data, spinup = ens["data"][0], len(ens["y_full"]) - N
+    data, spinup = ens["data"][0], len(ens["y_full"]) - T
     args = (data, ens["y_full"][:, None], ens["y"][:, None], spinup, compute_eofs(data))
     methods = make_methods(DEFAULT)
     assert list(methods) == list(DEFAULT.methods)
     for name, fit in methods.items():
         forced_est, eig = fit(*args)
-        assert forced_est.shape == (N, M), name
+        assert forced_est.shape == (T, M), name
         assert (eig is None) == (name in {"LR", "LIM-opt"}), name
         if eig is not None:
             assert eig[0].shape == (M,) and eig[1].shape == (M, M), name
@@ -25,7 +25,7 @@ def test_fit_methods_shapes():
 def test_methods_keep_the_data_mean():
     """Each class centers the data with the shared data_mean and adds it back in predict(), as on real data."""
     ens = cheap_ensemble()
-    data, spinup = ens["data"][0] + 5.0, len(ens["y_full"]) - N   # a member far from zero mean
+    data, spinup = ens["data"][0] + 5.0, len(ens["y_full"]) - T   # a member far from zero mean
     eofs = compute_eofs(data)
     assert np.allclose(eofs["data_mean"], data.mean(0))
     lr, _ = make_methods(DEFAULT)["LR"](data, ens["y_full"][:, None], ens["y"][:, None], spinup, eofs)

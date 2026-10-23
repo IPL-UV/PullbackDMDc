@@ -3,8 +3,8 @@
 The system fields are the keyword arguments of synthetic_generator.generate_ensemble, under the same names.
 Override from the command line with `--set key=value ...`, e.g.
     python run_ablation_studies.py --name slow50 --set tau1=50
-    python run_ablation_studies.py --name dip1 --set depth=1                     # a much deeper dip
-    python plot_generator_diagnostics.py --set "split=(1, 1, 1, 0.9, 0.5)"
+    python run_ablation_studies.py --set delta=0.5                               # a deeper dip: results/delta0.5/
+    python plot_generator_diagnostics.py --set "variances=(1, 1, 1, 0.9, 0.5)"
 """
 
 import ast
@@ -22,9 +22,9 @@ FIGURES_DIR = SYNTHETIC_DIR / "figures"
 class Config:
     # --- system: generate_ensemble's arguments (see synthetic_generator.py) -------------------
     tau1: float = 20  # slow mode decay time (yr)
-    split: Tuple[float, ...] = (1, 1, 1, 0.9, 0.1)  # variance shares (V_f, slow, pair, noise modes, measurement)
-    b_rot: float = 0.0  # fraction of the angle rotating the flat B toward w1; 1: B = w1
-    depth: float = 0.3  # amplitude of the forcing's 1965 dip
+    variances: Tuple[float, ...] = (1, 1, 1, 0.9, 0.1)  # V_f : V_1 : V_p : V_c : V_eps
+    delta: float = 0.15  # depth of the forcing's 1965 dip
+    alpha: float = 0.0  # overlap of the complement modes with w1; 0: orthogonal
     spin_up_factor: float = 100  # spin-up in units of the slowest decay time
     w_seed: int = 22
     eig_seed: int = 20
@@ -37,11 +37,11 @@ class Config:
     n_realizations: int = 100
 
     # --- sweep levels -----------------------------------------------------------------------
-    total_snrs: Tuple[float, ...] = (1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30)
+    total_snrs: Tuple[float, ...] = (1 / 100, 1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30, 100)
     partial_snr_factors: Tuple[float, ...] = (1 / 4, 1 / 2, 1, 2, 4)
-    slow_timescales_yr: Tuple[float, ...] = (1, 2, 5, 10, 20, 50, 100)
-    obs_noise_shares: Tuple[float, ...] = (0.1, 0.2, 0.5, 1, 2, 3)  # measurement-noise share v, his __main__ values
-    b_rots: Tuple[float, ...] = (0, 0.25, 0.5, 0.75, 1)
+    slow_timescales_yr: Tuple[float, ...] = (1, 2, 5, 10, 20, 40, 70, 100)
+    obs_noise_ratios: Tuple[float, ...] = (0.003, 0.01, 0.03, 0.1, 0.3, 1, 3)  # V_eps / V_f
+    alphas: Tuple[float, ...] = (0, 0.3, 0.5, 0.7, 0.9, 0.99)
 
     # --- methods ----------------------------------------------------------------------------
     lag: int = 1
@@ -51,10 +51,10 @@ class Config:
     @property
     def snr(self):
         """The reference system's theoretical SNR."""
-        return self.split[0] / sum(self.split[1:])
+        return self.variances[0] / sum(self.variances[1:])
 
 
-GENERATOR_KEYS = ("tau1", "split", "b_rot", "depth", "spin_up_factor", "w_seed", "eig_seed",
+GENERATOR_KEYS = ("tau1", "variances", "delta", "alpha", "spin_up_factor", "w_seed", "eig_seed",
                   "tau_pair", "period_pair", "lam_noise_max")
 
 
@@ -105,6 +105,11 @@ def config_diff(cfg, base=DEFAULT):
     """Short label of the fields that differ from base, e.g. 'tau1=50, lag=3'."""
     return ", ".join(f"{f.name}={getattr(cfg, f.name)!r}".replace("'", "")
                      for f in fields(Config) if getattr(cfg, f.name) != getattr(base, f.name))
+
+
+def run_name(cfg):
+    """Directory name of a run and of its figures: by dip depth, e.g. 'delta0.15'."""
+    return f"delta{cfg.delta:g}"
 
 
 def slug(cfg):

@@ -12,17 +12,17 @@ export MPLBACKEND=Agg
 cd "$(dirname "$(readlink -f "$0")")"
 
 echo "=== ablation runs ==="
-python run_ablation_studies.py --name baseline --n-jobs 12
-python run_ablation_studies.py --name dip1 --set depth=1 --n-jobs 12
+python run_ablation_studies.py --n-jobs 12                  # results/delta0.15/
+python run_ablation_studies.py --set delta=0.5 --n-jobs 12   # results/delta0.5/
 
 echo "=== run figures ==="
-python plot_ablation_run_results.py --runs baseline
-python plot_ablation_run_results.py --runs baseline dip1
-python plot_ablation_run_results.py --runs baseline --metric corr
-python plot_ablation_run_results.py --runs baseline dip1 --metric corr
-python plot_ablation_run_results.py --runs baseline --metric r2
-python plot_ablation_run_results.py --runs baseline dip1 --metric r2
+python plot_ablation_run_results.py --runs delta0.15
+python plot_ablation_run_results.py --runs delta0.15 delta0.5
+python plot_ablation_run_results.py --runs delta0.15 --metric corr
+python plot_ablation_run_results.py --runs delta0.15 delta0.5 --metric corr
+python plot_ablation_run_results.py --runs delta0.15 --metric r2
+python plot_ablation_run_results.py --runs delta0.15 delta0.5 --metric r2
 
 echo "=== generator diagnostics ==="
 python plot_generator_diagnostics.py
-python plot_generator_diagnostics.py --set depth=1
+python plot_generator_diagnostics.py --set delta=0.5

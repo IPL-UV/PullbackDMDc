@@ -10,7 +10,7 @@ from plot_ablation_run_results import (DEFAULT_STUDIES, METRICS, ROW_SPECS, Run,
                                        plot_forcing_change, plot_phase, plot_phase_change,
                                        plot_slow_mode_shapes, plot_sweeps)
 
-# the five default columns plus the ones the figures only show via --studies: forcing_rotation covers the
+# the five default columns plus the ones the figures only show via --studies: overlap covers the
 # LINEAR_X branch, and partial_snr_pair covers the pair_corr variant of row (c)
 PARAM_NAMES = {
     "total_snr": "SNR",
@@ -19,8 +19,8 @@ PARAM_NAMES = {
     "partial_snr_complement": "complement variance factor",
     "slow_timescale_modal_variance": r"$\tau_1$ (yr)",
     "slow_timescale_snr": r"$\tau_1$ (yr)",
-    "obs_noise": r"measurement noise share $v$",
-    "forcing_rotation": r"$b_{rot}$ (B: flat $\to w_1$)",
+    "obs_noise": r"$V_\varepsilon/V_f$",
+    "overlap": r"$\alpha$",
 }
 MODE_METHODS = ("PullbackDMDc", "LIM", "truth")
 
@@ -87,7 +87,7 @@ def make_modes():
 
 
 def test_ablation_run_result_figures():
-    reference = make_run("baseline", DEFAULT)
+    reference = make_run("delta0.15", DEFAULT)
     variant = make_run("slow50", with_overrides(DEFAULT, ["tau1=50"]), offset=0.02)
     with tempfile.TemporaryDirectory() as tmp:
         paths = {
@@ -104,7 +104,7 @@ def test_ablation_run_result_figures():
 
 def test_sweep_columns_follow_the_studies_asked_for():
     """The figure is transposed: one row per metric, one column per study, in the order given."""
-    run = make_run("baseline", DEFAULT)
+    run = make_run("delta0.15", DEFAULT)
     with tempfile.TemporaryDirectory() as tmp:
         default = plot_sweeps([run], pathlib.Path(tmp) / "default.png")
         assert default == list(DEFAULT_STUDIES)
@@ -114,14 +114,14 @@ def test_sweep_columns_follow_the_studies_asked_for():
         assert plot_sweeps([run], pathlib.Path(tmp) / "chosen.png", studies=chosen) == list(chosen)
 
         # a study no run measured is dropped rather than drawn empty, defaults included
-        thin = Run("thin", DEFAULT, run.results[run.results.study != "partial_snr_slow"], run.modes)
-        assert "partial_snr_slow" in DEFAULT_STUDIES
-        assert "partial_snr_slow" not in plot_sweeps([thin], pathlib.Path(tmp) / "thin.png")
-        assert plot_sweeps([thin], pathlib.Path(tmp) / "none.png", studies=("partial_snr_slow",)) == []
+        thin = Run("thin", DEFAULT, run.results[run.results.study != "overlap"], run.modes)
+        assert "overlap" in DEFAULT_STUDIES
+        assert "overlap" not in plot_sweeps([thin], pathlib.Path(tmp) / "thin.png")
+        assert plot_sweeps([thin], pathlib.Path(tmp) / "none.png", studies=("overlap",)) == []
 
-        # partial_snr_slow is a default column, but the pair and complement variants are not; --studies
-        # still draws them, and partial_snr_pair is the only way row (c)'s pair_corr variant is reached
-        assert "partial_snr_pair" not in DEFAULT_STUDIES
+        # the partial-SNR and fixed-variance studies are run but are not default columns; --studies still
+        # draws them, and partial_snr_pair is the only way row (c)'s pair_corr variant is reached
+        assert not {"partial_snr_slow", "partial_snr_pair", "slow_timescale_modal_variance"} & set(DEFAULT_STUDIES)
         assert plot_sweeps([run], pathlib.Path(tmp) / "pair.png",
                            studies=("partial_snr_pair",)) == ["partial_snr_pair"]
 
@@ -129,8 +129,12 @@ def test_sweep_columns_follow_the_studies_asked_for():
 
 
 def test_rows_are_the_three_metrics():
-    """Row labels carry the panel letters, and row (c) scores the pair plane only in PAIR_STUDIES."""
-    assert [spec.label[:3] for spec in ROW_SPECS] == ["(a)", "(b)", "(c)"]
+    """Forced score on top, slow-pattern correlation at the bottom; the bottom row scores the pair plane only in
+    PAIR_STUDIES."""
+    from plot_ablation_run_results import row_specs
+    corr = row_specs(METRICS["corr"])
+    assert corr[0].label == "forced-response correlation" and corr[-1].label == "slow-pattern correlation"
+    assert "decay time" in corr[1].label
     assert [spec.yscale for spec in ROW_SPECS] == ["linear", "log", "linear"]
     shape = ROW_SPECS[-1]
     assert shape.panel("partial_snr_pair", 1)[0] == "pair_corr"
@@ -141,9 +145,7 @@ def test_rows_are_the_three_metrics():
     assert ROW_SPECS[1].panel("total_snr", 1) == ("slow_tau_yr", None)
     assert ROW_SPECS[1].truth == "tau1_yr" and ROW_SPECS[1].note
     assert all(spec.truth is None for spec in ROW_SPECS if spec is not ROW_SPECS[1])
-    # row (a) follows the metric; the other rows do not depend on it
-    from plot_ablation_run_results import row_specs
-    corr = row_specs(METRICS["corr"])
+    # the top row follows the metric; the other rows do not depend on it
     assert corr[0].metric == "forced_corr" and "correlation" in corr[0].label
     assert ROW_SPECS[0].metric == "forced_rel_rmse" and corr[1:] == ROW_SPECS[1:]
 
@@ -158,7 +160,7 @@ def test_the_study_column_figures_are_laid_out_on_one_grid():
     LEGEND_INCHES, or dropped to a different COLUMN_W, would be out by a sixth of its width.
     """
     studies = ("total_snr", "obs_noise")
-    run = make_run("baseline", DEFAULT)
+    run = make_run("delta0.15", DEFAULT)
     with tempfile.TemporaryDirectory() as tmp:
         paths = {name: pathlib.Path(tmp) / f"{name}.png" for name in ("sweeps", "shapes")}
         plot_sweeps([run], paths["sweeps"], studies=studies)
@@ -178,7 +180,7 @@ def test_the_residual_is_the_departure_from_that_level_s_truth():
 
 def test_slow_mode_shape_figure():
     """Both branches of the truth: fixed in total_snr, moving per level in the stand-in obs_noise."""
-    run = make_run("baseline", DEFAULT)
+    run = make_run("delta0.15", DEFAULT)
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "shapes.png"
         drawn = plot_slow_mode_shapes(run, path, studies=("total_snr", "obs_noise"))
@@ -188,8 +190,8 @@ def test_slow_mode_shape_figure():
 
 def test_forcing_change_figure():
     cheap = with_overrides(DEFAULT, ["spin_up_factor=5"])  # the forcing figure simulates each run's reference
-    reference = make_run("baseline", cheap)
-    variant = make_run("dip1", with_overrides(cheap, ["depth=1"]), offset=0.02)
+    reference = make_run("delta0.15", cheap)
+    variant = make_run("delta0.5", with_overrides(cheap, ["delta=0.5"]), offset=0.02)
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "forcing_change.png"
         plot_forcing_change(reference, variant, path)
@@ -201,7 +203,7 @@ def test_the_default_system_is_marked_in_every_sweep_column():
     """
     assert default_level("total_snr", DEFAULT) == DEFAULT.snr
     assert default_level("obs_noise", DEFAULT) == 0.1
-    assert default_level("forcing_rotation", DEFAULT) == 0
+    assert default_level("overlap", DEFAULT) == 0
     assert all(default_level(f"partial_snr_{c}", DEFAULT) == 1.0 for c in ("slow", "pair", "complement"))
     assert all(default_level(f"slow_timescale_{h}", DEFAULT) == DEFAULT.tau1
                for h in ("snr", "modal_variance"))
@@ -213,3 +215,48 @@ def test_the_default_system_is_marked_in_every_sweep_column():
     assert default_level("joint_snr_timescale", DEFAULT) is None
     # every column the sweep figure draws by default is marked
     assert all(default_level(study, DEFAULT) is not None for study in DEFAULT_STUDIES)
+
+
+def test_figures_carry_no_captions():
+    """No suptitle and no figure-level text in any figure; the legends and in-panel notes stay.
+
+    The figures are captured at save time, so the test sees exactly what is written to disk.
+    """
+    import plot_ablation_run_results as module
+    captured = []
+    original = module.save
+    module.save = lambda fig, path, **kwargs: (captured.append(fig), original(fig, path, **kwargs))
+    cheap = with_overrides(DEFAULT, ["spin_up_factor=5"])
+    reference = make_run("delta0.15", cheap)
+    variant = make_run("delta0.5", with_overrides(cheap, ["delta=0.5"]), offset=0.02)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            plot_sweeps([reference, variant], tmp / "sweeps.png", metric=METRICS["corr"])
+            plot_sweeps([reference], tmp / "single.png")
+            plot_phase(reference, tmp / "phase.png")
+            plot_phase_change(reference, variant, tmp / "change.png")
+            plot_forcing_change(reference, variant, tmp / "forcing.png")
+            plot_slow_mode_shapes(reference, tmp / "shapes.png", studies=("total_snr", "obs_noise"))
+    finally:
+        module.save = original
+    assert len(captured) == 6
+    for fig in captured:
+        assert fig._suptitle is None and not fig.texts, [t.get_text() for t in fig.texts]
+    # the non-decaying note is drawn on the decay-time row's axes (the stand-in LIM is half non-decaying)
+    sweeps = captured[0]
+    notes = [t.get_text() for ax in sweeps.axes for t in ax.texts]
+    assert any(text.startswith("non-decaying dropped") for text in notes), notes
+    # the method legends hang outside the last column and must survive the tight crop
+    methods = {t.get_text() for ax in sweeps.axes if ax.get_legend() for t in ax.get_legend().get_texts()}
+    assert {"PullbackDMDc", "LIM"} <= methods and all(ax.get_legend().get_in_layout()
+                                                       for ax in sweeps.axes if ax.get_legend())
+    # PullbackDMDc is drawn last, on top, while the legend keeps METHOD_ORDER
+    first = sweeps.axes[0]
+    drawn = [line.get_label() for line in first.lines if not line.get_label().startswith("_")]
+    assert [m for m in drawn if m in ("PullbackDMDc", "LIM")][-1] == "PullbackDMDc", drawn
+    row_legend = [t.get_text() for ax in sweeps.axes[:4] if ax.get_legend() for t in ax.get_legend().get_texts()]
+    assert row_legend[:2] == ["PullbackDMDc", "LIM"], row_legend
+    # runs that differ only in the dip depth are labelled by it, reference first
+    labels = [t.get_text() for legend in sweeps.legends for t in legend.get_texts()]
+    assert labels[:2] == [r"$\delta = 0.15$", r"$\delta = 0.5$"], labels

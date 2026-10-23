@@ -6,11 +6,11 @@ import numpy as np
 from ablations import M, make_level
 from config import DEFAULT
 from run_ablation_studies import (centered_rms, decay_time, fitted_slow_mode, run_level, save_slow_modes, score,
-                                  true_eigs)
+                                  slow_index, true_eigs)
 from support import CHEAP, cheap_ensemble, recovery_metrics
 
 
-OPERATOR_KEYS = ("slow_eig_err", "slow_tau_yr", "slow_tau_rel_err", "slow_tau_log_ratio",
+OPERATOR_KEYS = ("slow_eig", "slow_eig_err", "slow_tau_yr", "slow_tau_rel_err", "slow_tau_log_ratio",
                  "slow_unstable", "slow_corr", "slow_angle", "pair_corr", "pair_angle")
 
 
@@ -51,7 +51,7 @@ def test_forced_r2_is_one_minus_rel_rmse_squared():
     """R^2 = 1 - SSE/SST: 1 for an exact estimate, below 0 once the error exceeds the forced variance."""
     ens = cheap_ensemble()
     assert abs(score(ens, ens["forced"])["forced_r2"] - 1) < 1e-12
-    noisy = ens["forced"] + 0.3 * ens["internal"][0]
+    noisy = ens["forced"] + 0.3 * (ens["data"][0] - ens["forced"])
     row = score(ens, noisy)
     assert abs(row["forced_r2"] - (1 - row["forced_rel_rmse"] ** 2)) < 1e-12 and row["forced_r2"] < 1
     assert score(ens, ens["forced"] + 3.0)["forced_r2"] < 0  # an offset counts, unlike in forced_corr
@@ -111,13 +111,28 @@ def test_slow_mode_shape_score_is_invariant_to_sign_and_scale():
 
 
 def test_non_decaying_fit_is_counted_not_scored():
-    """A propagator with |lambda_1| > 1 has no decay time: the tau metrics are nan and the fit is flagged."""
+    """A slow eigenvalue >= 1 has no decay time: the fit is flagged and no slow metric but the eigenvalue is scored."""
     ens = cheap_ensemble()
-    row = score(ens, ens["forced"], eig(propagator(ens, lam1=1.01)))
-    assert row["slow_unstable"] == 1
-    assert np.isnan(row["slow_tau_yr"]) and np.isnan(row["slow_tau_rel_err"])
-    assert np.isnan(row["slow_tau_log_ratio"])
-    assert row["slow_angle"] < 1e-6, row["slow_angle"]  # the shape is still recovered
+    for lam1 in (1.01, 1.05):
+        row = score(ens, ens["forced"], eig(propagator(ens, lam1=lam1)))
+        assert row["slow_unstable"] == 1
+        assert abs(row["slow_eig"] - lam1) < 1e-9
+        assert all(np.isnan(row[k]) for k in ("slow_tau_yr", "slow_tau_rel_err", "slow_tau_log_ratio",
+                                              "slow_corr", "slow_angle")), row
+        assert fitted_slow_mode(eig(propagator(ens, lam1=lam1)), ens["W"][:, 0]) is None
+
+
+def test_slow_index_is_the_largest_real_eigenvalue():
+    """The selection never looks at the truth: the largest real eigenvalue, whatever lambda_1 is."""
+    assert slow_index(np.array([0.2, 0.9 + 0.3j, 0.9 - 0.3j, 0.5, -0.95])) == 3   # complex ones are skipped
+    assert slow_index(np.array([1.2, 0.99, 0.1])) == 0                             # even when it does not decay
+    assert slow_index(np.array([-0.3, -0.8, 0.5 + 0.1j, 0.5 - 0.1j])) is None      # no positive real eigenvalue
+    assert slow_index(np.array([0.0, -0.1])) is None
+    assert slow_index(np.array([0.5 + 0.1j, 0.5 - 0.1j])) is None                  # no real eigenvalue
+    # a fit whose slow mode is not the slowest real one is scored on the largest, not on the one nearest lambda_1
+    ens = cheap_ensemble()
+    eigvals = np.r_[0.999, np.linalg.eigvals(ens["A"])]
+    assert eigvals[slow_index(eigvals)] == 0.999
 
 
 def test_tau_log_ratio_is_symmetric_in_over_and_underestimates():
@@ -155,8 +170,8 @@ def test_run_level_persists_slow_mode_patterns():
         assert abs(np.linalg.norm(m["pattern"]) - 1) < 1e-12
         assert m["pattern"] @ truth[0]["pattern"] >= 0, "patterns are signed to agree with the truth"
         assert m["study"] == "obs_noise" and m["param_value"] == 0.5
-    # every row of the CSV that has a propagator also has a pattern, so the two files stay aligned
-    assert len(fits) == len([r for r in rows if r["method"] in {"PullbackDMDc", "LIM"}])
+    # every row of the CSV with a decaying slow mode also has a pattern, so the two files stay aligned
+    assert len(fits) == len([r for r in rows if r["method"] in {"PullbackDMDc", "LIM"} and r["slow_unstable"] == 0])
 
 
 def test_save_slow_modes_round_trips_without_pickle():
@@ -175,4 +190,4 @@ def test_save_slow_modes_round_trips_without_pickle():
 
 def test_fitted_slow_mode_without_a_propagator():
     """LR returns no operator, so it contributes no pattern rather than a nan one."""
-    assert fitted_slow_mode(None, 0.9, np.ones(M)) is None
+    assert fitted_slow_mode(None, np.ones(M)) is None

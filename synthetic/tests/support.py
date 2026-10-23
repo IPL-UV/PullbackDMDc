@@ -2,10 +2,10 @@
 
 import numpy as np
 
-from ablations import M, N
+from ablations import M, T
 from config import DEFAULT, with_overrides
 from methods import compute_eofs, fit_pullback
-from run_ablation_studies import centered_rms, rms, slow_index, true_eigs  # noqa: F401  (re-exported)
+from run_ablation_studies import centered_rms, rms, true_eigs  # noqa: F401  (re-exported)
 from synthetic_generator import generate_ensemble
 
 # a short spin-up keeps a test ensemble cheap: 5 decay times still leave the start-up transient at e^-5
@@ -24,7 +24,7 @@ def noise_free_white_forcing(n_steps=20000):
     """
     ens = cheap_ensemble(spin_up_factor=40)  # long enough for the random initial state to decay
     rng = np.random.default_rng(0)
-    spinup = len(ens["y_full"]) - N
+    spinup = len(ens["y_full"]) - T
     y = rng.standard_normal(spinup + n_steps)
     x, data = rng.standard_normal(M), np.empty((len(y), M))
     for t, yt in enumerate(y):
@@ -39,8 +39,7 @@ def recovery_metrics(ens, lag):
     Deliberately independent of run_ablation_studies.score: test_runner_results_match_recovery_metrics
     cross-checks the two implementations against each other.
     """
-    spinup = len(ens["y_full"]) - N
-    lam1, _ = true_eigs(ens)
+    spinup = len(ens["y_full"]) - T
     rows = []
     for data in ens["data"]:
         model = fit_pullback(data, ens["y_full"][:, None], ens["y"][:, None], spinup, compute_eofs(data), lag=lag)
@@ -49,6 +48,7 @@ def recovery_metrics(ens, lag):
             forced_corr=np.corrcoef((forced_est - forced_est.mean(0)).ravel(),
                                     (ens["forced"] - ens["forced"].mean(0)).ravel())[0, 1],
             forced_err=rms(forced_est - ens["forced"]) / centered_rms(ens["forced"]),
-            slow_eig=model.eigvals[slow_index(model.eigvals, lam1 ** lag)].real,
+            # the slow mode is the largest real eigenvalue, selected here without run_ablation_studies.slow_index
+            slow_eig=model.eigvals[np.abs(model.eigvals.imag) < 1e-12].real.max(),
         ))
     return {key: np.array([row[key] for row in rows]) for key in rows[0]}

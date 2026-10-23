@@ -52,6 +52,17 @@ def reserve_legend_strip(fig):
     fig.get_layout_engine().set(rect=(0, 0, legend_rect(fig), 1))
 
 
+def keep_legend_strip(fig):
+    """Keep the reserved strip in a bbox="tight" save, legend or not.
+
+    The crop follows the visible artists, so an empty strip -- or one whose legend is shorter than it -- is cut
+    off and the figure comes out narrower than its column-mate. A transparent patch over the strip pins the
+    crop to the figure's right edge in both, so their columns stay at the same pitch.
+    """
+    fig.add_artist(mpl.patches.Rectangle((legend_rect(fig), 0), 1 - legend_rect(fig), 1, transform=fig.transFigure,
+                                         facecolor="none", edgecolor="none", zorder=-1))
+
+
 # the narrowest gap, as a fraction of a level colorbar's length, at which two neighbouring tick labels still
 # clear each other at PANEL_TITLE on a COLUMN_W-wide bar ("0.95" is about a twelfth of it)
 LEVEL_LABEL_GAP = 0.09

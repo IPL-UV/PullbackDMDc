@@ -1,23 +1,26 @@
 """Figures for ablation runs (results/<run>/ from run_ablation_studies.py), written to figures/ablations/.
 
-    python plot_ablation_run_results.py --runs baseline                # figures/ablations/baseline/
-    python plot_ablation_run_results.py --runs baseline slow50         # figures/ablations/compare_baseline_vs_slow50/
-    python plot_ablation_run_results.py --runs baseline --studies total_snr partial_snr_pair
-    python plot_ablation_run_results.py --runs baseline --metric corr   # forced correlation: *_corr.png
-    python plot_ablation_run_results.py --runs baseline --metric r2     # forced R^2: *_r2.png
+    python plot_ablation_run_results.py --runs delta0.15                 # figures/ablations/delta0.15/
+    python plot_ablation_run_results.py --runs delta0.15 delta0.5        # figures/ablations/compare_delta0.15_vs_delta0.5/
+    python plot_ablation_run_results.py --runs delta0.15 --studies total_snr partial_snr_pair
+    python plot_ablation_run_results.py --runs delta0.15 --metric corr   # forced correlation: *_corr.png
+    python plot_ablation_run_results.py --runs delta0.15 --metric r2     # forced R^2: *_r2.png
 
-results_sweeps.png is one row per evaluation metric, (a) to (c), and one column per ablation study. Row (a), the
-phase diagrams and the forcing-change panel show --metric: rel_rmse (default), corr or r2 (METRICS).
+results_sweeps.png is one row per evaluation metric and one column per ablation study: the forced-response score
+on top, the fitted slow-mode decay time, and the slow-pattern correlation at the bottom. The top row, the phase
+diagrams and the forcing-change panel show --metric: rel_rmse (default), corr or r2 (METRICS).
 The columns are DEFAULT_STUDIES; --studies picks any other selection of SWEEP_STUDIES, left to right.
 
-With several runs the first is the reference: thin dotted medians under the later runs' solid lines and bands.
+With several runs the first is the reference, drawn solid with its interquartile band; the later runs are dotted
+medians over it. Runs that differ only in the dip depth are labelled by it (delta = 0.15, delta = 0.5).
 With exactly two runs a third figure maps the change in the phase diagram (later run minus reference).
+The figures carry no captions (no suptitle or footnote): the legends and axis labels are the whole key.
 """
 
 import argparse
 import pathlib
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from typing import Callable, Optional
 
 import matplotlib.pyplot as plt
@@ -31,8 +34,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from ablations import DEFAULT_STUDIES, LAT, LINEAR_X, STUDIES, make_level
 from config import FIGURES_DIR, RESULTS_DIR, Config, config_diff, from_json
-from plot_style import (COLUMN_W, LEGEND_INCHES, PAGE_W, PANEL_TITLE, ROW_H, legend_rect, level_ticklabels,
-                        reserve_legend_strip, save, zero_line)
+from plot_style import (COLUMN_W, LEGEND_INCHES, PAGE_W, PANEL_TITLE, ROW_H, keep_legend_strip, legend_rect,
+                        level_ticklabels, reserve_legend_strip, save, zero_line)
 from utils.params import colors, method_markers
 
 FIGURES_DIR = FIGURES_DIR / "ablations"
@@ -40,18 +43,24 @@ FIGURES_DIR = FIGURES_DIR / "ablations"
 SWEEP_STUDIES = {name: study.title for name, study in STUDIES.items() if name != "joint_snr_timescale"}
 
 METHOD_ORDER = ["PullbackDMDc", "LIM", "LIM-opt", "LR"]
+ON_TOP = "PullbackDMDc"  # drawn after the other methods, so its curves are not hidden where they overlap
+
+
+def draw_order(methods):
+    """methods with ON_TOP moved last: the order they are drawn in, not the order of the legend."""
+    return sorted(methods, key=lambda method: method == ON_TOP)
 # the methods with a fitted propagator; LIM-opt's is never used, on real data or here
 OPERATOR_METHODS = {"PullbackDMDc": "PullbackDMDc", "LIM": "LIM"}
 PAIR_STUDIES = {"partial_snr_pair"}  # studies scored on the oscillating pair rather than the slow mode
 TRUTH_STYLE = dict(color="k", linestyle="--", linewidth=1.2)
-REFERENCE_STYLE = dict(linestyle=":", linewidth=1.1, alpha=0.9)
-VARIANT_LINESTYLES = ["-", "--", "-."]
+COMPARED_STYLE = dict(linewidth=1.3, alpha=0.9)  # the later runs: medians only, over the reference's bands
+COMPARED_LINESTYLES = [":", "-.", (0, (5, 2, 1, 2))]
 DEFAULT_LINE_STYLE = dict(color="0.75", linewidth=0.8, zorder=0)  # marks the default system in a sweep column
 
 
 @dataclass(frozen=True)
 class Metric:
-    """A forced-response skill score: row (a) of the sweeps, the phase diagrams and the forcing-change panel.
+    """A forced-response skill score: the top row of the sweeps, the phase diagrams and the forcing-change panel.
 
     The phase figure is shaded by the score and contoured in black at `levels`, labelled on the lines, so it
     carries its own key. The levels are absolute, so one contour means the same skill in every panel and panels
@@ -62,24 +71,16 @@ class Metric:
     levels: tuple
     cmap: str              # sequential, dark = good
     higher_is_better: bool
-    note: str              # the footnote's sentence on row (a)
 
 
+# rel_rmse: rms(est - truth) over the time-centered RMS of the truth (the V_f the SNR is built from), an offset
+# counts; corr: each latitude centered over time first, so only the shape counts; r2: 1 - relative RMSE^2
 METRICS = {
-    "rel_rmse": Metric("forced_rel_rmse", "forced relative RMSE", (0.25, 0.5, 0.75, 1.0, 1.5), "Purples_r", False,
-                       "Row (a) divides by the time-centered RMS of the true forced response, the same $V^{(f)}$ the "
-                       "SNR is built from; its numerator is uncentered, so a constant offset in the estimate still "
-                       "counts."),
-    "corr": Metric("forced_corr", "forced correlation", (0.5, 0.7, 0.8, 0.9, 0.95), "Purples", True,
-                   "Row (a) correlates estimate and truth after centering each latitude over time, so an offset in "
-                   "the level does not count, only the shape."),
-    "r2": Metric("forced_r2", "forced $R^2$", (0, 0.25, 0.5, 0.75, 0.9), "Purples", True,
-                 "Row (a) is $R^2 = 1 - SSE/SST$: the uncentered squared error over the time-centered variance of "
-                 "the true forced response (= 1 - relative RMSE$^2$), so a constant offset counts and values below "
-                 "0 are worse than the truth's own mean."),
+    "rel_rmse": Metric("forced_rel_rmse", "forced relative RMSE", (0.25, 0.5, 0.75, 1.0, 1.5), "Purples_r", False),
+    "corr": Metric("forced_corr", "forced-response correlation", (0.5, 0.7, 0.8, 0.9, 0.95), "Purples", True),
+    "r2": Metric("forced_r2", "forced $R^2$", (0, 0.25, 0.5, 0.75, 0.9), "Purples", True),
 }
 DEFAULT_METRIC = METRICS["rel_rmse"]
-PHASE_SUPTITLE_Y = 1.08  # the figure is one row, so the suptitle has to clear the panel titles
 # the forcing-change figure contrasts a method that uses the dynamics with one that only regresses on
 # the forcing, so a change in the forcing's shape is exactly what should separate them
 FORCING_CHANGE_METHODS = ("PullbackDMDc", "LR")
@@ -96,6 +97,13 @@ class Run:
     def label(self, base=None):
         diff = config_diff(self.cfg, base.cfg) if base is not None else config_diff(self.cfg)
         return f"{self.name} ({diff})" if diff else self.name
+
+    def legend_label(self, runs):
+        """The run's entry in a legend shared with `runs`: its dip depth when that is all that tells them apart."""
+        differing = {f for other in runs for f in fields(Config) if getattr(other.cfg, f.name) != getattr(self.cfg, f.name)}
+        if differing and {f.name for f in differing} <= {"delta"}:
+            return rf"$\delta = {self.cfg.delta:g}$"
+        return self.label(runs[0] if self is not runs[0] else None)
 
     @property
     def methods(self):
@@ -131,9 +139,10 @@ def plot_band(ax, df, metric, method, label=None, linestyle="-"):
             linewidth=1.5, linestyle=linestyle, label=label or method)
 
 
-def plot_reference(ax, df, metric, method):
+def plot_compared(ax, df, metric, method, linestyle=":"):
+    """A later run over the reference: the median only, so the reference's band stays readable under it."""
     q = quantiles(df[df.method == method], metric)
-    ax.plot(q.index, q["median"], color=colors[method], **REFERENCE_STYLE)
+    ax.plot(q.index, q["median"], color=colors[method], linestyle=linestyle, **COMPARED_STYLE)
 
 
 def spectral_metric(study=None, lag=None):
@@ -167,7 +176,7 @@ def shape_metric(study, lag=None):
     return "slow_corr", r"$\mathrm{corr}(\hat w_1, w_1)$"
 
 
-def unstable_note(df):
+def unstable_note(df, run_label=None):
     """Per-method share of fits whose slow eigenvalue does not decay (|lambda| >= 1), or '' when there are none.
 
     A trend the fit cannot attribute to the forcing has to go somewhere, and in a propagator it goes into a
@@ -176,7 +185,8 @@ def unstable_note(df):
     """
     shares = [(method, df[df.method == method].slow_unstable.mean()) for method in OPERATOR_METHODS]
     shown = [f"{method} {share:.0%}" for method, share in shares if share > 0.005]
-    return "non-decaying dropped: " + ", ".join(shown) if shown else ""
+    who = f" ({run_label})" if run_label else ""
+    return f"non-decaying dropped{who}: " + ", ".join(shown) if shown else ""
 
 
 @dataclass(frozen=True)
@@ -209,38 +219,16 @@ class RowSpec:
 
 def row_specs(metric=DEFAULT_METRIC):
     return (
-        RowSpec(f"(a) {metric.label}", "linear", metric=metric.column, forced=True),
-        RowSpec("(b) slow-mode decay time\n" + r"$\hat\tau_1$ (yr)", "log", metric_for=spectral_metric,
+        RowSpec(metric.label, "linear", metric=metric.column, forced=True),
+        RowSpec("slow-mode decay time\n" + r"$\hat\tau_1$ (yr)", "log", metric_for=spectral_metric,
                 truth="tau1_yr", truth_label=r"true $\tau_1$", note=True),
-        RowSpec("(c) mode shape correlation", "linear", metric_for=shape_metric),
+        RowSpec("slow-pattern correlation", "linear", metric_for=shape_metric),
     )
 
 
 ROW_SPECS = row_specs()
 ANNOTATION_HEADROOM = 0.16  # fraction of the y-range left clear above the curves for a panel annotation
-HEADER_INCHES = 0.35        # strip kept clear at the top of the figure for the run legend or suptitle
-FOOTNOTE_FONTSIZE = 7
-FOOTNOTE = ("Rows (b) and (c) score the eigen-decomposition of the "
-            "fitted lag-step propagator (PullbackDMDc and LIM; LR and LIM-opt have none, as on real data). "
-            r"Row (b) is the fitted decay time itself against the true $\tau_1$ (dashed), so a curve "
-            "above the line is too slow and one below it too fast. Row (c) is the correlation between the fitted "
-            "mode's span and the true one -- the cosine of their largest principal angle -- so 1 is exact recovery "
-            "of the pattern up to sign and scale; each panel is annotated with the subspace it scores")
-# appended only when a PAIR_STUDIES column is drawn, which --studies decides: without one the row scores the
-# slow mode in every panel and naming an exception sends the reader looking for a column that is not there
-PAIR_CLAUSE = ", the slow mode everywhere except the pair study"
-
-
-def footnote_height(fig, text=FOOTNOTE, fontsize=FOOTNOTE_FONTSIZE):
-    """Fraction of the figure height the wrapped footnote needs, as a rect bottom for tight_layout.
-
-    matplotlib wraps the text at draw time and reports no height for it, so the line count is estimated
-    from the figure width at ~0.5 em per character. The reservation has to be in inches rather than a
-    fixed fraction: the figure's height follows the row count and its width the number of studies, so a
-    fraction that clears the footnote under one --studies selection buries the x labels under another.
-    """
-    lines = max(1, int(np.ceil(len(text) / (fig.get_figwidth() * 72 / (0.5 * fontsize)))))
-    return (lines * 1.3 * fontsize / 72 + 0.12) / fig.get_figheight()
+HEADER_INCHES = 0.35        # strip kept clear at the top of the figure for the run legend
 
 
 def row_legend(row_axes, **kwargs):
@@ -248,32 +236,42 @@ def row_legend(row_axes, **kwargs):
 
     Kept out of the layout: it hangs off the last panel, so tight_layout would otherwise narrow every
     column to make room for it inside the rect -- on top of the LEGEND_INCHES already reserved for it,
-    which is what the strip is for.
+    which is what the strip is for. The caller puts it back in the layout after tight_layout, or
+    bbox="tight" crops it off the saved figure. Returns the legend, or None for a row with no entries.
     """
     entries = {}
     for ax in row_axes:
         handles, labels = ax.get_legend_handles_labels()
         entries.update(dict(zip(labels, handles)))
+    # the methods in METHOD_ORDER whatever order they were drawn in, then the reference lines
+    entries = dict(sorted(entries.items(), key=lambda item: (METHOD_ORDER.index(item[0]) if item[0] in METHOD_ORDER
+                                                             else len(METHOD_ORDER))))
     if entries:
-        row_axes[-1].legend(entries.values(), entries.keys(), **kwargs).set_in_layout(False)
+        legend = row_axes[-1].legend(entries.values(), entries.keys(), **kwargs)
+        legend.set_in_layout(False)
+        return legend
+    return None
 
 
 def draw_panel(ax, spec, run, df, study, linestyle=None):
-    """One run in one panel. linestyle None draws the reference: thin dotted medians, no legend entries."""
+    """One run in one panel. linestyle None draws the reference: solid medians with their bands and the legend
+    entries; a linestyle draws a later run in it, medians only and no legend entries."""
     metric, _ = spec.panel(study, run.cfg.lag)
-    for method, label in spec.methods(run).items():
+    labels = spec.methods(run)
+    for method in draw_order(labels):
+        label = labels[method]
         if linestyle is None:
-            plot_reference(ax, df, metric, method)
+            plot_band(ax, df, metric, method, label=label)
         else:
-            plot_band(ax, df, metric, method, label=label, linestyle=linestyle)
+            plot_compared(ax, df, metric, method, linestyle=linestyle)
     if spec.truth is not None:
         # one value per level by construction, so the median is that value; drawn per run, because the
         # truth is a property of the run's config and two runs need not share it
         truth = df.groupby("param_value")[spec.truth].median()
         if linestyle is None:
-            ax.plot(truth.index, truth.values, color="k", **REFERENCE_STYLE)
-        else:
             ax.plot(truth.index, truth.values, label=spec.truth_label, **TRUTH_STYLE)
+        else:
+            ax.plot(truth.index, truth.values, color="k", linestyle=linestyle, **COMPARED_STYLE)
 
 
 def default_level(study, cfg):
@@ -286,13 +284,13 @@ def default_level(study, cfg):
     if study == "total_snr":
         return cfg.snr
     if study.startswith("partial_snr_"):
-        return 1.0                           # factor 1 leaves the component at the reference split
+        return 1.0                           # factor 1 leaves the component at the reference variances
     if study.startswith("slow_timescale_"):
         return cfg.tau1
     if study == "obs_noise":
-        return cfg.split[4]
-    if study == "forcing_rotation":
-        return cfg.b_rot
+        return cfg.variances[4] / cfg.variances[0]
+    if study == "overlap":
+        return cfg.alpha
     return None
 
 
@@ -302,7 +300,7 @@ def plot_sweeps(runs, path, studies=None, metric=DEFAULT_METRIC):
     One row per metric (ROW_SPECS), one column per study, so a row reads as one quantity across the
     ablations. Studies absent from every run are dropped, and the order given is the order drawn.
     """
-    reference, variants = (runs[0], runs[1:]) if len(runs) > 1 else (None, runs)
+    reference, variants = runs[0], runs[1:]
     studies = [s for s in (studies or DEFAULT_STUDIES) if any(s in set(r.results.study) for r in runs)]
     if not studies:
         return []
@@ -314,11 +312,11 @@ def plot_sweeps(runs, path, studies=None, metric=DEFAULT_METRIC):
         frames = {run.name: run.results[run.results.study == study] for run in runs}
         for i, spec in enumerate(specs):
             ax = axes[i, j]
-            if reference is not None and not frames[reference.name].empty:
-                draw_panel(ax, spec, reference, frames[reference.name], study)
-            for run, linestyle in zip(variants, VARIANT_LINESTYLES):
+            for run, linestyle in zip(variants, COMPARED_LINESTYLES):
                 if not frames[run.name].empty:
                     draw_panel(ax, spec, run, frames[run.name], study, linestyle=linestyle)
+            if not frames[reference.name].empty:
+                draw_panel(ax, spec, reference, frames[reference.name], study)   # on top of the later runs
             ax.set_xscale("linear" if study in LINEAR_X else "log")   # per column: a property of the study
             ax.set_yscale(spec.yscale)                                # per row: a property of the metric
             ax.grid(alpha=0.3, linewidth=0.5)
@@ -337,7 +335,8 @@ def plot_sweeps(runs, path, studies=None, metric=DEFAULT_METRIC):
                 # tight_layout counts this text into the row gap, and row (b) carries no title for it to
                 # overlap; runs are stacked with a newline so several of them grow it downward rather
                 # than sideways into the neighbouring columns
-                note = "\n".join(filter(None, (unstable_note(frames[r.name]) for r in runs)))
+                labels = {r.name: r.legend_label(runs) if variants else None for r in runs}
+                note = "\n".join(filter(None, (unstable_note(frames[r.name], labels[r.name]) for r in runs)))
                 ax.text(0.5, 1.02, note, transform=ax.transAxes, ha="center", va="bottom",
                         fontsize=6.5, color="0.35")
         axes[0, j].set_title(SWEEP_STUDIES[study])
@@ -348,20 +347,19 @@ def plot_sweeps(runs, path, studies=None, metric=DEFAULT_METRIC):
     legend_rows = {}
     for i, spec in enumerate(specs):
         legend_rows.setdefault(spec.forced, i)
-    for i in legend_rows.values():
-        row_legend(axes[i], loc="upper left", bbox_to_anchor=(1.02, 1.0), frameon=False)
-    if reference is not None:
-        run_handles = [Line2D([], [], color="k", **REFERENCE_STYLE)] + [
-            Line2D([], [], color="k", linestyle=ls) for _, ls in zip(variants, VARIANT_LINESTYLES)]
-        run_labels = [f"{reference.label()} (reference)"] + [r.label(reference) for r in variants]
-        fig.legend(run_handles, run_labels, loc="upper center", ncol=len(runs), frameon=False)
-    else:
-        fig.suptitle(variants[0].label())
-    footnote = ("median over realizations, shaded: interquartile range. " + metric.note + " " + FOOTNOTE
-                + (PAIR_CLAUSE if any(s in PAIR_STUDIES for s in studies) else "") + ".")
-    fig.text(0.5, 0.004, footnote, ha="center", fontsize=FOOTNOTE_FONTSIZE, wrap=True)
-    header = HEADER_INCHES / fig.get_figheight()
-    fig.tight_layout(rect=(0, footnote_height(fig, footnote), legend_rect(fig), 1 - header), h_pad=1.6)
+    legends = [row_legend(axes[i], loc="upper left", bbox_to_anchor=(1.02, 1.0), frameon=False)
+               for i in legend_rows.values()]
+    header = 0.0
+    if variants:
+        run_handles = [Line2D([], [], color="k", linestyle="-")] + [
+            Line2D([], [], color="k", linestyle=ls, **COMPARED_STYLE) for _, ls in zip(variants, COMPARED_LINESTYLES)]
+        fig.legend(run_handles, [run.legend_label(runs) for run in runs], loc="upper center", ncol=len(runs),
+                   frameon=False)
+        header = HEADER_INCHES / fig.get_figheight()
+    fig.tight_layout(rect=(0, 0, legend_rect(fig), 1 - header), h_pad=1.6)
+    for legend in filter(None, legends):
+        legend.set_in_layout(True)  # back in, so that bbox="tight" keeps the legend strip in the saved figure
+    keep_legend_strip(fig)
     save(fig, path, tight=False, bbox="tight")
     return studies
 
@@ -413,7 +411,6 @@ def plot_phase(run, path, metric=DEFAULT_METRIC):
         ax.set_xlabel(r"$\tau_1$ (yr)")
     axes[0, 0].set_ylabel("SNR")
     fig.colorbar(filled, ax=axes[0], ticks=metric.levels, label=metric.label, fraction=0.03, pad=0.02)
-    fig.suptitle(f"{run.label()}\nmedian over realizations", y=PHASE_SUPTITLE_Y)
     save(fig, path, tight=False, bbox="tight")
 
 
@@ -434,9 +431,7 @@ def plot_phase_change(reference, variant, path, metric=DEFAULT_METRIC):
         label_phase_axes(ax, deltas[method], method)
         ax.set_xlabel(r"$\tau_1$ (yr)")
     axes[0, 0].set_ylabel("SNR")
-    fig.colorbar(mesh, ax=axes[0], label=f"change in {metric.label}", fraction=0.03, pad=0.02)
-    fig.suptitle(f"{variant.label(reference)} minus {reference.name}: change in median (blue: better)",
-                 y=PHASE_SUPTITLE_Y)
+    fig.colorbar(mesh, ax=axes[0], label=f"change in {metric.label} (blue: better)", fraction=0.03, pad=0.02)
     save(fig, path, tight=False, bbox="tight")
 
 
@@ -460,10 +455,10 @@ def plot_forcing_change(reference, variant, path, metric=DEFAULT_METRIC):
     ensembles = forcing_change_ensembles([reference, variant])
     total = {run.name: run.results[run.results.study == "total_snr"] for run in (reference, variant)}
     fig, axes = plt.subplots(1, 3, figsize=(PAGE_W, 3.6))
-    # REFERENCE_STYLE already carries a linewidth, so neither style takes one at the call site
-    styles = {reference.name: dict(REFERENCE_STYLE, color="0.35"),
-              variant.name: dict(linestyle="-", color="C0", linewidth=1.6)}
-    labels = {reference.name: reference.label(), variant.name: variant.label(reference)}
+    # the reference solid and the variant dotted, as in the sweeps
+    styles = {reference.name: dict(linestyle="-", color="k", linewidth=1.6),
+              variant.name: dict(COMPARED_STYLE, linestyle=":", color="k")}
+    labels = {run.name: run.legend_label([reference, variant]) for run in (reference, variant)}
 
     for name, ens in ensembles.items():
         axes[0].plot(ens["years"], ens["y"], label=labels[name], **styles[name])
@@ -481,11 +476,11 @@ def plot_forcing_change(reference, variant, path, metric=DEFAULT_METRIC):
     for name, df in total.items():
         if df.empty:
             continue
-        for method in (m for m in FORCING_CHANGE_METHODS if m in set(df.method)):
+        for method in draw_order(m for m in FORCING_CHANGE_METHODS if m in set(df.method)):
             if name == reference.name:
-                plot_reference(axes[2], df, metric.column, method)
-            else:
                 plot_band(axes[2], df, metric.column, method, label=method)
+            else:
+                plot_compared(axes[2], df, metric.column, method)
     axes[2].set_xscale("log")
     axes[2].grid(alpha=0.3, linewidth=0.5)
     axes[2].set_xlabel("SNR")
@@ -493,14 +488,7 @@ def plot_forcing_change(reference, variant, path, metric=DEFAULT_METRIC):
     axes[2].set_title("(c) total SNR sweep")
     axes[2].legend(loc="upper right", fontsize=7, frameon=False)
 
-    # title above and note below the axes, as in plot_slow_mode_shapes: reserving a fraction of a figure
-    # this short for a two-line title leaves a band of empty canvas that bbox="tight" will not crop
     fig.tight_layout()
-    fig.suptitle(f"{labels[variant.name]} against {reference.name}: forcing, forced response and skill",
-                 fontsize=10, y=1.06)
-    fig.text(0.5, -0.08, "dotted: the reference run. (b) is standardized, so only the shapes are compared. "
-             "(c) is the median over realizations, shaded: interquartile range.",
-             ha="center", fontsize=7.5, color="0.35")
     save(fig, path, tight=False, bbox="tight")
 
 
@@ -551,6 +539,7 @@ def plot_slow_mode_shapes(run, path, studies=None):
                              figsize=(COLUMN_W * len(studies) + LEGEND_INCHES, ROW_H * len(methods)),
                              sharex=True, layout="constrained")
     reserve_legend_strip(fig)
+    keep_legend_strip(fig)
     for j, study in enumerate(studies):
         frame = run.modes[run.modes.study == study]
         levels = sorted(set(frame.param_value))
@@ -587,24 +576,15 @@ def plot_slow_mode_shapes(run, path, studies=None):
     # Each panel autoscales to its own residuals: they span orders of magnitude between methods, so one
     # shared scale leaves every panel but the worst an empty strip, and forcing each panel symmetric about
     # zero spends half of it on empty space whenever the residual sits to one side -- which is itself part
-    # of the result. The cost is that heights are not comparable across panels; the footnote says so and the
-    # tick labels on every panel make it visible.
-    # title above and note below the axes rather than inside them: bbox="tight" grows the canvas to
-    # include both, where a two-line suptitle would sit on top of the two-line column headings
-    fig.suptitle(f"{run.label()}: slow-mode pattern error $\\hat w_1 - w_1$, median over realizations",
-                 fontsize=10, y=1.04)
-    fig.text(0.5, -0.04, "each level is differenced against the true $w_1$ of that level; grey: zero, an "
-             "exact pattern. "
-             "Every panel sets its own y scale, so read the shapes within a panel and the numbers, not the "
-             "heights, between them. Patterns are unit norm and signed to agree with the truth, so they can "
-             "be averaged over realizations.", ha="center", va="top", fontsize=7.5, color="0.35", wrap=True)
+    # of the result. The cost is that heights are not comparable across panels; the tick labels on every
+    # panel make it visible.
     save(fig, path, tight=False, bbox="tight")
     return studies
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--runs", nargs="+", default=["baseline"], help="run names; the first is the reference")
+    parser.add_argument("--runs", nargs="+", default=["delta0.15"], help="run names; the first is the reference")
     parser.add_argument("--studies", nargs="+", default=list(DEFAULT_STUDIES), choices=list(SWEEP_STUDIES),
                         metavar="STUDY", help=f"sweep columns, left to right (default: {' '.join(DEFAULT_STUDIES)})")
     parser.add_argument("--metric", default="rel_rmse", choices=list(METRICS), help="forced-response skill score")
