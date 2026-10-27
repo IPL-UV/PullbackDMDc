@@ -19,7 +19,8 @@ if __name__ == '__main__':
     start_time = time.time()
 
     clim_vars = requested_clim_vars(['tas_ocean','psl','tas'])
-    esms = ['CanESM5', 'MIROC6', 'CESM2', 'MPI-ESM1-2-LR']
+    # 20CRv3 (R2-M2): its "truth" is the raw reanalysis (forced + internal), flagged with 'truth_is_raw'.
+    esms = ['CanESM5', 'MIROC6', 'CESM2', 'MPI-ESM1-2-LR', '20CRv3']
 
     # Regional means (R2-L374): latitude bands from params.regions, for the variables in region_vars.
     region_names = _env_list('PBDMDC_REGIONS', 'n65,s65')
@@ -58,7 +59,9 @@ if __name__ == '__main__':
 
                     truth_ds, lats = load_truth(var, model, base_truth_dir, return_lats=True)
 
-                    if var == 'psl':
+                    truth_is_raw = model == '20CRv3'
+                    # Smooth the finite-ensemble psl truth; keep the raw reanalysis unsmoothed.
+                    if var == 'psl' and not truth_is_raw:
                         truth_ds = smooth_truth(truth_ds, window_years=3)
 
                     truth_gm = global_mean(truth_ds, lats)
@@ -118,6 +121,7 @@ if __name__ == '__main__':
                             'truth': truth_gm,
                             'time': time_index,
                             'data_names': data_names,  # member names, sorted; same order as 'preds'
+                            'truth_is_raw': truth_is_raw,
                         }
                         for r in region_ts:
                             region_ts[r][model][method] = {
@@ -125,6 +129,7 @@ if __name__ == '__main__':
                                 'truth': truth_regions[r],
                                 'time': time_index,
                                 'data_names': data_names,
+                                'truth_is_raw': truth_is_raw,
                             }
 
                 # Save all timeseries for this var / lag / year-range combination
