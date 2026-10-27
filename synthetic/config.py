@@ -1,73 +1,47 @@
 """Every tunable value of the synthetic ablations, in one frozen dataclass.
 
+The system fields are the keyword arguments of synthetic_generator.generate_ensemble, under the same names.
 Override from the command line with `--set key=value ...`, e.g.
-    python run_ablations.py --name slow50 --set tau1_yr=50 slow_variance=0.5
-    python plot_system.py --set tau_p_yr=5 period_p_yr=8
-    python run_ablations.py --name ar6 --set forcing_source=file                     # AR6 CO2 from the default file
-    python run_ablations.py --name exp --set forcing_source=analytic                 # plain exp ramp
-    python run_ablations.py --name dip1 --set gauss_dip_amp=1                        # a much deeper dip
-    python compare_forcings.py --set gauss_bump_amp=0.05 gauss_bump_year=1940         # reshape the Gaussian model
-    python run_ablations.py --name total --set forcing_source=file forcing_column=total forcing_file=/abs/forcing.csv
-
-Grid size M = 20 and record length N = 1200 months are structural and stay fixed in ablations.py.
+    python run_ablation_studies.py --name slow50 --set tau1=50
+    python run_ablation_studies.py --set delta=0.5                               # a deeper dip: results/delta0.5/
+    python plot_generator_diagnostics.py --set "variances=(1, 1, 1, 0.9, 0.5)"
 """
 
 import ast
 import json
+import pathlib
 from dataclasses import asdict, dataclass, fields, replace
-from typing import Optional, Tuple
+from typing import Tuple
+
+SYNTHETIC_DIR = pathlib.Path(__file__).resolve().parent
+RESULTS_DIR = SYNTHETIC_DIR / "results"
+FIGURES_DIR = SYNTHETIC_DIR / "figures"
 
 
 @dataclass(frozen=True)
 class Config:
-    # --- timescales -------------------------------------------------------------------------
-    tau1_yr: float = 20  # slow mode e-folding time
-    tau_p_yr: float = 2  # oscillating pair damping time
-    period_p_yr: float = 4  # oscillating pair period
-    complement_eig_range: Tuple[float, float] = (0.0, 0.1)  # 17 fast modes; eig 0.1 is tau ~0.43 months
+    # --- system: generate_ensemble's arguments (see synthetic_generator.py) -------------------
+    tau1: float = 20  # slow mode decay time (yr)
+    variances: Tuple[float, ...] = (1, 1, 1, 0.9, 0.1)  # V_f : V_1 : V_p : V_c : V_eps
+    delta: float = 0.15  # depth of the forcing's 1965 dip
+    alpha: float = 0.0  # overlap of the complement modes with w1; 0: orthogonal
+    spin_up_factor: float = 100  # spin-up in units of the slowest decay time
+    w_seed: int = 22
+    eig_seed: int = 20
+    tau_pair: float = 1.5  # fast pair decay time (yr)
+    period_pair: float = 4.0  # fast pair period (yr)
+    lam_noise_max: float = 0.1  # noise-mode eigenvalues are uniform on (0, lam_noise_max)
 
-    # --- variances: internal variance of each mode group, in units of the forced variance V_f --
-    # reference SNR = 1 / (slow_variance + pair_variance + complement_variance)
-    slow_variance: float = 1.0  # s1^2 = slow_variance * V_f
-    pair_variance: float = 1.0  # sp^2 = pair_variance * V_f / 2 per pair mode
-    complement_variance: float = 1.0  # sc^2 = complement_variance * V_f / 17 per complement mode
-    forced_variance: float = 20.0  # V_f of the reference forced response (= M); sets the overall scale
-
-    # --- forcing in time (CO2 zonal pattern in space) ----------------------------------------
-    # Always centered on the observed interval (the record): generation, the methods' input and every plot.
-    # "analytic": c + a exp((t - 2014) / forcing_efold_yr), c, a fitted to the AR6 CO2 ERF (forcing_file/column ignored)
-    # "analytic_gauss": c + a exp((t - 2014) / gauss_efold_yr) + bump - dip, c, a fitted jointly with the Gaussians
-    #         to the AR6 CO2 ERF (forcing_efold_yr and forcing_file/column ignored)
-    # "file": column forcing_column of forcing_file, an annual CSV with a `year` column or a monthly CSV with a
-    #         `time` column (YYYY-MM-01); a relative path is relative to the repo root (forcing_efold_yr ignored)
-    forcing_source: str = "analytic_gauss"
-    forcing_file: str = "data_preparation/AR6_ERF_1750-2019.csv"
-    forcing_column: str = "co2"
-    record_end_year: int = 2014  # the 100-yr record ends in December of this year (1915-2014)
-    forcing_efold_yr: float = 60  # e-folding time of the exp ramp (fit: 59.8 yr)
-    # analytic_gauss shape. Amplitudes are W m^-2 next to a = 1.96 (only their ratio to the exp matters, since the
-    # overall scale is removed); amplitude 0 removes that Gaussian. Defaults: one dip, no bump. The joint fit to
-    # AR6 CO2 is efold 63.2 yr, bump 0.048 at 1921 (sigma 17.9 yr), dip 0.137 at 1966 (sigma 14.1 yr).
-    gauss_efold_yr: float = 65  # e-folding time of the Gaussian model's exp
-    gauss_bump_amp: float = 0  # positive Gaussian (>= 0)
-    gauss_bump_year: float = 1920
-    gauss_bump_width_yr: float = 20  # sigma (> 0)
-    gauss_dip_amp: float = 0.25  # negative Gaussian, subtracted (>= 0)
-    gauss_dip_year: float = 1965
-    gauss_dip_width_yr: float = 15  # sigma (> 0)
-
-    # --- seeds and forcing history ----------------------------------------------------------
-    pattern_seed: int = 22
-    eigenvalue_seed: int = 20
+    # --- realizations -----------------------------------------------------------------------
     noise_seed: int = 0
-    history: int = 1200  # months of forcing history given to the methods (and the oracle)
+    n_realizations: int = 100
 
     # --- sweep levels -----------------------------------------------------------------------
-    total_snrs: Tuple[float, ...] = (1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30)
+    total_snrs: Tuple[float, ...] = (1 / 100, 1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30, 100)
     partial_snr_factors: Tuple[float, ...] = (1 / 4, 1 / 2, 1, 2, 4)
-    slow_timescales_yr: Tuple[float, ...] = (1, 2, 5, 10, 20, 50, 100)
-    mode_overlaps: Optional[Tuple[float, ...]] = None  # None: (0, 0.25, base overlap, 0.75, 0.9, 0.95)
-    n_realizations: int = 100
+    slow_timescales_yr: Tuple[float, ...] = (1, 2, 5, 10, 20, 40, 70, 100)
+    obs_noise_ratios: Tuple[float, ...] = (0.003, 0.01, 0.03, 0.1, 0.3, 1, 3)  # V_eps / V_f
+    alphas: Tuple[float, ...] = (0, 0.3, 0.5, 0.7, 0.9, 0.99)
 
     # --- methods ----------------------------------------------------------------------------
     lag: int = 1
@@ -75,12 +49,18 @@ class Config:
     methods: Tuple[str, ...] = ("PullbackDMDc", "LIM", "LIM-opt", "LR")
 
     @property
-    def variances(self):
-        return self.slow_variance, self.pair_variance, self.complement_variance
+    def snr(self):
+        """The reference system's theoretical SNR."""
+        return self.variances[0] / sum(self.variances[1:])
 
-    @property
-    def reference_snr(self):
-        return 1 / sum(self.variances)
+
+GENERATOR_KEYS = ("tau1", "variances", "delta", "alpha", "spin_up_factor", "w_seed", "eig_seed",
+                  "tau_pair", "period_pair", "lam_noise_max")
+
+
+def generator_kwargs(cfg):
+    """cfg's system as keyword arguments of generate_ensemble."""
+    return {key: getattr(cfg, key) for key in GENERATOR_KEYS}
 
 
 DEFAULT = Config()
@@ -122,11 +102,22 @@ def from_json(path):
 
 
 def config_diff(cfg, base=DEFAULT):
-    """Short label of the fields that differ from base, e.g. 'tau1_yr=50, lag=3'."""
+    """Short label of the fields that differ from base, e.g. 'tau1=50, lag=3'."""
     return ", ".join(f"{f.name}={getattr(cfg, f.name)!r}".replace("'", "")
                      for f in fields(Config) if getattr(cfg, f.name) != getattr(base, f.name))
 
 
-def slug(cfg, base=DEFAULT):
-    label = config_diff(cfg, base)
+def run_name(cfg):
+    """Directory name of a run and of its figures: by dip depth, e.g. 'delta0.15'."""
+    return f"delta{cfg.delta:g}"
+
+
+def slug(cfg):
+    label = config_diff(cfg)
     return "default" if not label else "".join(c if c.isalnum() or c in "._=" else "_" for c in label.replace(", ", "__"))
+
+
+def load_config(args):
+    """The config an entry point runs with: results/<from_run>/config.json or DEFAULT, then --set overrides."""
+    cfg = from_json(RESULTS_DIR / args.from_run / "config.json") if args.from_run else DEFAULT
+    return with_overrides(cfg, args.set)

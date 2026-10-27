@@ -38,6 +38,10 @@ See `getting_started_pullbackdmdc.ipynb` for a runnable walkthrough of:
 - computing rotated modes,
 - and serializing a fitted model object.
 
+That notebook builds its own toy data inline to exercise the model class. For the full synthetic *experiment*
+package — the ablation studies, the four-method comparison and the figures — see
+[`synthetic/README.md`](synthetic/README.md) and its Getting started section.
+
 The model class implementation is in `utils/pullback_dmdc.py`. For import consistency, use:
 
 ```python
