@@ -25,6 +25,7 @@ year_ranges=[(1850, 2014), (1950, 2014)]
 ###########################################
 
 clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
+units = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}  # GM / regional means are in the data's units
 region_labels = {'n65': 'N of 65°N', 's65': 'S of 65°S'}
 method_names_on_fig = {'RegGMST': 'RegGMST', 'LR': 'Linear reg.','LIM': 'LIM','LIM-opt': 'LIM-opt',
                        'PullbackDMDc': 'PullbackDMDc', 'PullbackDMDc-2d': 'PullbackDMDc(2d)', 'PullbackDMDc-3d': 'PullbackDMDc(3d)'}
@@ -606,7 +607,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
         ax_ts.set_xlim(time_index[0], time_index[-1])
         ax_ts.tick_params(axis='y', labelsize=tick_fontsize)
         if col == 0:
-            ax_ts.set_ylabel(f'{label_prefix} {clim_vars_on_fig[var]}', fontsize=11)
+            ax_ts.set_ylabel(f'{label_prefix} {clim_vars_on_fig[var]} ({units[var]})', fontsize=11)
             # Prune boundary ticks to avoid overlap with the RMSD panel when hspace=0.
             ax_ts.yaxis.set_major_locator(MaxNLocator(nbins=5, prune='lower'))
         else:

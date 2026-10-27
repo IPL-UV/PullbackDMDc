@@ -305,6 +305,8 @@ def plot_summary_figure(
         sharex='row',
     )
 
+    # PCs project the sqrt(cos lat)-weighted anomalies onto unit-norm EOFs, so they carry the field's units.
+    field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
     row_specs = [
         {
             'title': 'Dominant Time Scale\n(years)',
@@ -315,10 +317,10 @@ def plot_summary_figure(
             'xlim': None,
         },
         {
-            'title': 'Variance of Smoothed\nInternal Variability',
+            'title': f'Variance of Smoothed\nInternal Variability ({field_unit}$^2$)',
             'data': row2_smoothed_var,
             'xscale': 'linear',
-            'xlabel': r'Var of smoothed $w\,\tilde{z}(t)$ [PC units^2]',
+            'xlabel': rf'Var of smoothed $w\,\tilde{{z}}(t)$ [{field_unit}$^2$]',
             'valid': lambda x: np.isfinite(x) & (x > 0),
             'xlim': None,
         },
@@ -406,7 +408,7 @@ def plot_summary_figure(
         label='20CRv3 member',
     )
 
-    fig.suptitle('OSAT: Robustness', fontsize=18)
+    fig.suptitle(f'{clim_vars_on_fig[clim_var]}: Robustness', fontsize=18)
 
     out_path = os.path.join(
         results_dir,

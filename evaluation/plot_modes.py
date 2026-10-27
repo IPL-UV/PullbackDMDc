@@ -324,8 +324,7 @@ def plot_mode_figure(clim_var, chosen_model, d, row_scales):
             cbar_format = '%.0f' if cbar_mode != 'per_row' and clim_var == 'psl' else '%.2f'
             cbar_map = fig.colorbar(m, cax=cax_map, orientation='horizontal', format=cbar_format)
             cbar_map.ax.tick_params(labelsize=shared_fontsize)
-            if cbar_mode != 'per_row':
-                cbar_map.set_label(cbar_labels[clim_var], fontsize=shared_fontsize)
+            cbar_map.set_label(cbar_labels[clim_var], fontsize=shared_fontsize)
 
         # --- time series ---
         if ts_anchor_ax is None:

@@ -250,7 +250,9 @@ for clim_var in clim_vars:
         ax2.tick_params(labelsize=13)
 
         if mode_idx == 0:
-            ax.set_ylabel(r'PSD  [PC units² / (cy yr$^{-1}$)]', fontsize=15)
+            # PCs carry the field's units (sqrt(cos lat)-weighted anomalies on unit-norm EOFs).
+            field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
+            ax.set_ylabel(f'PSD  [{field_unit}$^2$ / (cy yr$^{{-1}}$)]', fontsize=15)
 
     # shared legend placed below the figure
     legend_handles = [

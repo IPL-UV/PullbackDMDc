@@ -14,13 +14,12 @@ import numpy as np
 import pandas as pd
 
 from evaluation.plot_gm_timeseries import (volcanic_events, clim_vars_on_fig, region_labels,
-                                           method_names_on_fig, method_order_on_fig)
+                                           method_names_on_fig, method_order_on_fig, units)
 from utils.params import (method_names, colors, regions, pdf_root, requested_lags, requested_year_ranges,
                           requested_clim_vars, requested_methods, run_suffixes, results_dir)
 
 obs = '20CRv3'
 clim_vars = ['tas_ocean', 'tas', 'psl']
-units = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}
 volcanic_color = '#b0c4de'
 window_size = 12 * 3
 

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import xarray as xr
 
-from utils.data_utils import undo_lat_scaling
+from utils.data_utils import undo_lat_scaling, load_forcings
 from utils.params import predictions_dir
 
 
@@ -44,7 +44,7 @@ if __name__ == '__main__':
     else:
         print('year range not recognized')
 
-    clim_var = 'tas_ocean'  # 'psl', 'tas', 'tas_ocean'
+    clim_var = os.getenv('PBDMDC_CLIM_VAR', 'tas_ocean')  # 'psl', 'tas', 'tas_ocean'
 
     models = ['20CRv3', 'MPI-ESM1-2-LR']
     method_keys = ['LR', 'PullbackDMDc']
@@ -87,19 +87,27 @@ if __name__ == '__main__':
             pattern = undo_lat_scaling(pattern, lat, nlon, nan_mask)
             patterns[(model, method)].append(pattern)
 
+    # LR and PullbackDMDc are fit to total ERF standardised by its 1850-2014 std (load_forcings /
+    # load_forcings_pullback), so dividing B by that std gives field units per W m^-2.
+    sigma_forcing = np.std(load_forcings(mean_center=False, start_year=start_year, end_year=end_year))
+    print(f'std of total ERF {start_year}-{end_year}: {sigma_forcing:.4f} W m-2', flush=True)
+    field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
+    per_forcing = f'{field_unit} per W m$^{{-2}}$'
+    cbar_labels = {method_names_on_fig['LR']: per_forcing,
+                   method_names_on_fig['PullbackDMDc']: per_forcing + '\nper 3-month step'}
+
+    # No difference row: LR's B is a regression coefficient and PullbackDMDc's a per-step input
+    # coefficient, so their difference has no consistent meaning.
     fields = {}
     for model in models:
-        lr = mean_pattern(patterns[(model, 'LR')]).reshape(len(lat), len(lon))
-        dmdcp = mean_pattern(patterns[(model, 'PullbackDMDc')]).reshape(len(lat), len(lon))
-        diff = dmdcp - lr
+        lr = mean_pattern(patterns[(model, 'LR')]).reshape(len(lat), len(lon)) / sigma_forcing
+        dmdcp = mean_pattern(patterns[(model, 'PullbackDMDc')]).reshape(len(lat), len(lon)) / sigma_forcing
         fields[(model, method_names_on_fig['LR'])] = lr
         fields[(model, method_names_on_fig['PullbackDMDc'])] = dmdcp
-        fields[(model, 'Difference')] = diff
 
     row_labels = [
         method_names_on_fig['LR'],
         method_names_on_fig['PullbackDMDc'],
-        "Difference",
     ]
 
     row_limits = {}
@@ -125,6 +133,18 @@ if __name__ == '__main__':
         constrained_layout=True,
     )
 
+    # Map latitude extent: for OSAT, the mask rows that contain data (40S-65N), rounded outward
+    # to 5 degrees, as in plot_modes.py; falls back to the old fixed extent.
+    if clim_var == 'tas_ocean':
+        data_rows = (~nan_mask).any(axis=1)
+        if data_rows.any():
+            map_lat_extent = [max(-90., 5 * np.floor(lat[data_rows].min() / 5)),
+                              min(90., 5 * np.ceil(lat[data_rows].max() / 5))]
+        else:
+            map_lat_extent = [-40, 60]
+    else:
+        map_lat_extent = [-90, 90]
+
     lon2d, lat2d = np.meshgrid(lon, lat)
     row_mappables = {}
 
@@ -149,10 +169,7 @@ if __name__ == '__main__':
 
             ax.coastlines(linewidth=0.7)
             mappable = m
-            if clim_var == 'tas_ocean':
-                ax.set_extent([-180, 180, -40, 60], crs=ccrs.PlateCarree())
-            else:
-                ax.set_extent([-180, 180, -90, 90], crs=ccrs.PlateCarree())
+            ax.set_extent([-180, 180] + map_lat_extent, crs=ccrs.PlateCarree())
 
             if i == 0:
                 title_model = 'Obs (20CRv3)' if model == '20CRv3' else display_model_name(model)
@@ -179,6 +196,7 @@ if __name__ == '__main__':
             format='%.2f',
             aspect=30,
         )
+        cbar.set_label(cbar_labels[row_label], fontsize=8)
 
     fig.suptitle(
         f"{clim_vars_on_fig[clim_var]} B patterns: {method_names_on_fig['LR']} vs {method_names_on_fig['PullbackDMDc']}",
