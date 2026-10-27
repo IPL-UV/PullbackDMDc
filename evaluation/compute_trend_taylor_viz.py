@@ -6,8 +6,11 @@ import time
 import numpy as np
 
 from evaluation.utils.taylor_diagram import TaylorDiagramEstimator
+from evaluation.utils.trends import parse_window, window_mask, window_label
 from utils.data_utils import load_prediction, load_truth
-from utils.params import artifact_root, esms, lags, method_names, year_ranges, requested_lags, requested_year_ranges, predictions_dir
+from utils.params import (artifact_root, esms, lags, method_names, year_ranges, requested_lags, requested_year_ranges,
+                          predictions_dir, requested_clim_vars, requested_methods, run_suffixes, results_dir,
+                          guard_main_results_write)
 
 
 def compute_linear_trend(field_2d: np.ndarray) -> np.ndarray:
@@ -19,31 +22,29 @@ def compute_linear_trend(field_2d: np.ndarray) -> np.ndarray:
 if __name__ == '__main__':
     start_time = time.time()
 
-    clim_vars = ['tas_ocean', 'psl', 'tas']
+    clim_vars = requested_clim_vars(['tas_ocean', 'psl', 'tas'])
+    methods = requested_methods(method_names)
+
+    # Optional trend window (R2-M2): PBDMDC_TREND_WINDOW='YYYY-YYYY'; unset = full period.
+    raw_window = os.getenv('PBDMDC_TREND_WINDOW', '').strip()
+    window = parse_window(raw_window) if raw_window else None
+    out_prefix = f'td_metrics_trend_{window_label(window)}' if window else 'td_metrics_trend'
 
     for lag in requested_lags(lags):
         for start_year, end_year in requested_year_ranges(year_ranges):
-            if lag == 3:
-                lag_suffix = ''
-            else:
-                lag_suffix = f'_lag{lag}'
+            year_suffix, run_suffix = run_suffixes(lag, (start_year, end_year))
+            guard_main_results_write(run_suffix, method_names)
 
-            if (start_year, end_year) == (1950, 2014):
-                year_suffix = '_tier1'
-            elif (start_year, end_year) == (1850, 2014):
-                year_suffix = ''
-            else:
-                print('year range not recognized')
-
-            base_pred_dir = predictions_dir(year_suffix, lag_suffix)
+            base_pred_dir = predictions_dir(year_suffix, run_suffix)
             base_truth_dir = os.path.join(artifact_root, f'means{year_suffix}')
-            results_dir = os.path.join(artifact_root, 'evaluation_results', f'results{year_suffix}{lag_suffix}')
+            out_dir = results_dir(year_suffix, run_suffix)
 
-            os.makedirs(results_dir, exist_ok=True)
+            os.makedirs(out_dir, exist_ok=True)
 
             for var in clim_vars:
                 print(
-                    f'\n=== Processing trend TD for {var}, lag={lag}, years={start_year}-{end_year} ===',
+                    f'\n=== Processing trend TD for {var}, lag={lag}, years={start_year}-{end_year}, '
+                    f'window={window_label(window) if window else "full"} ===',
                     flush=True,
                 )
 
@@ -61,9 +62,17 @@ if __name__ == '__main__':
                     nan_mask = np.isnan(truth[0, :])
                     truth = truth[:, ~nan_mask]
 
+                    if window:
+                        time_mask = window_mask(truth_ds['time'].dt.year.values, window)
+                        truth = truth[time_mask]
+
                     truth_trend = compute_linear_trend(truth)
 
-                    for method in method_names:
+                    for method in methods:
+                        pred_dir = os.path.join(base_pred_dir, var, model)
+                        if not any(f.split('_')[-1] == f'{method}.pkl' for f in os.listdir(pred_dir)):
+                            print(f'  Skipping {method}: no predictions in {pred_dir}', flush=True)
+                            continue
                         print(f'  Computing trend Taylor metrics for method: {method}', flush=True)
 
                         preds = load_prediction(
@@ -72,6 +81,10 @@ if __name__ == '__main__':
                             method=method,
                             base_pred_dir=base_pred_dir,
                         ).astype(np.float64)
+
+                        if window:
+                            assert preds.shape[0] == time_mask.size, f'{model} {method}: time length mismatch'
+                            preds = preds[time_mask]
 
                         n_members = preds.shape[2]
                         trend_member_metrics = []
@@ -98,7 +111,7 @@ if __name__ == '__main__':
 
                     gc.collect()
 
-                out_path = os.path.join(results_dir, f'td_metrics_trend_{var}.json')
+                out_path = os.path.join(out_dir, f'{out_prefix}_{var}.json')
                 with open(out_path, 'w') as f:
                     json.dump(td_metrics, f)
                 print(f'Saved: {out_path}', flush=True)

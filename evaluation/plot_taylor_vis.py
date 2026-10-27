@@ -4,13 +4,15 @@ import numpy as np
 import os
 import json
 from evaluation.utils.metrics import add_one_custom_plot, compute_taylor_std_range
+from evaluation.utils.trends import parse_window, window_label
 from utils.params import artifact_root, colors, method_names, esms, year_ranges, lags, method_markers, pdf_root, requested_lags, requested_year_ranges
+from utils.params import requested_clim_vars
 esms=esms[1:] # Exclude obs for this figure
 esms = ['CESM2', 'MPI-ESM1-2-LR', 'CanESM5', 'MIROC6']
 
 ###########################################
 # Plot only necessary to save some space
-clim_vars = ['tas_ocean', 'psl', 'tas']
+clim_vars = requested_clim_vars(['tas_ocean', 'psl', 'tas'])
 lags=[3]#, 3]
 year_ranges=[(1850, 2014)]#, (1950, 2014)]
 # Choose which Taylor metrics to plot: 'raw' or 'trend'.
@@ -34,6 +36,15 @@ def get_mode_config(mode):
             'output_prefix': 'classic_taylor_diagram',
         }
     if mode == 'trend':
+        # Optional trend window (R2-M2), as written by compute_trend_taylor_viz with PBDMDC_TREND_WINDOW.
+        raw_window = os.getenv('PBDMDC_TREND_WINDOW', '').strip()
+        if raw_window:
+            window = parse_window(raw_window)
+            return {
+                'metrics_prefix': f'td_metrics_trend_{window_label(window)}',
+                'title_mode': f'trend {window[0]}\u2013{window[1]}',
+                'output_prefix': f'classic_taylor_diagram_trend_{window_label(window)}',
+            }
         return {
             'metrics_prefix': 'td_metrics_trend',
             'title_mode': 'trend',
