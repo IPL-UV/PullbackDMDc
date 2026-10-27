@@ -39,6 +39,13 @@ def requested_methods(default_methods):
     return [m.strip() for m in raw_methods.split(",") if m.strip()]
 
 
+def requested_clim_vars(default_vars):
+    raw = os.getenv("PBDMDC_CLIM_VARS")
+    if not raw:
+        return list(default_vars)
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
 def predictions_dir(year_suffix, lag_suffix):
     return os.path.join(artifact_root, f'models{year_suffix}{lag_suffix}')
 
