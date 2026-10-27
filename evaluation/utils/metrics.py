@@ -291,3 +291,29 @@ def add_one_custom_plot(td_list, fig, subplot=None, legend=True, percentage=95, 
     taylor_fig.graph_axes._taylor_plot = taylor_fig
     taylor_fig.graph_axes._taylor_contours = taylor_fig.contours
     return taylor_fig.graph_axes
+
+def lat_flat_from_pars(pars):
+    lat = np.asarray(pars['lat'].values if hasattr(pars['lat'], 'values') else pars['lat'])
+    nlon = int(pars['nlon'])
+    nan_mask = pars['nan_mask']
+    return np.repeat(lat[:, None], nlon, axis=1)[~nan_mask]
+
+
+def regional_mean_flat(data_flat, resc_coef_flat, lat_flat, lat_min, lat_max):
+    assert lat_flat.shape == resc_coef_flat.shape, (lat_flat.shape, resc_coef_flat.shape)
+    sel = (lat_flat >= lat_min) & (lat_flat <= lat_max)
+    assert sel.any(), f'No grid points between {lat_min} and {lat_max}'
+    return global_mean_flat(data_flat[..., sel], resc_coef_flat[sel])
+
+
+def regional_mean(x, lats, lat_min, lat_max):
+    """Same convention as global_mean (input scaled by sqrt(cos lat)), restricted to a latitude band."""
+    if isinstance(x, xr.DataArray):
+        x = x.to_masked_array()
+    lats = np.asarray(lats)
+    sel = (lats >= lat_min) & (lats <= lat_max)
+    assert sel.any(), f'No grid points between {lat_min} and {lat_max}'
+    xs = x[..., sel, :]
+    sq = np.cos(np.pi * lats[sel][:, None] / 180.)
+    xs = xs / np.sqrt(sq)
+    return (xs * sq).mean(axis=(-1, -2)) / ((xs * 0 + 1.) * sq).mean(axis=(-1, -2))

@@ -66,6 +66,7 @@ year_ranges = [(1850,2014),(1950,2014)]
 lags =  [12, 3, 6, 1]
 optlag = 60
 transition_time = 1200-12
+regions = {'n65': (65, 90), 's65': (-90, -65)}  # latitude bands for regional means (R2-L374)
 
 DEFAULT_LAG = 3
 STORED_EOFS = 200  # number of EOFs written by data_preparation/compute_eofs.py by default

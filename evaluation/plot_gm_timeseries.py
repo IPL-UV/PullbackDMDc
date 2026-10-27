@@ -13,7 +13,8 @@ import matplotlib.lines as mlines
 from matplotlib.ticker import MaxNLocator
 import pandas as pd
 from utils.params import method_markers
-from utils.params import artifact_root, pdf_root, requested_lags, requested_year_ranges
+from utils.params import (pdf_root, requested_lags, requested_year_ranges, requested_clim_vars,
+                          run_suffixes, results_dir, regions)
 esms = esms[1:] # Exclude obs for this figure
 
 ###########################################
@@ -24,6 +25,7 @@ year_ranges=[(1850, 2014), (1950, 2014)]
 ###########################################
 
 clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
+region_labels = {'n65': 'N of 65°N', 's65': 'S of 65°S'}
 method_names_on_fig = {'RegGMST': 'RegGMST', 'LR': 'Linear reg.','LIM': 'LIM','LIM-opt': 'LIM-opt',
                        'PullbackDMDc': 'PullbackDMDc', 'PullbackDMDc-2d': 'PullbackDMDc(2d)', 'PullbackDMDc-3d': 'PullbackDMDc(3d)'}
 method_order_on_fig = ['RegGMST', 'LIM-opt', 'LIM',  'PullbackDMDc', 'LR', 'PullbackDMDc-2d', 'PullbackDMDc-3d']
@@ -509,7 +511,7 @@ def plot_timeseries_v2(timeseries, esms, method_names, colors, clim_vars_on_fig,
 
 def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
                     method_names_on_fig, var,
-                    panel_height_ratios=(2, 1, 1)):
+                    panel_height_ratios=(2, 1, 1), label_prefix='GM'):
     n_models = len(esms)
     n_cols = 4
     n_rows = math.ceil(n_models / n_cols)
@@ -604,7 +606,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
         ax_ts.set_xlim(time_index[0], time_index[-1])
         ax_ts.tick_params(axis='y', labelsize=tick_fontsize)
         if col == 0:
-            ax_ts.set_ylabel(f'GM {clim_vars_on_fig[var]}', fontsize=11)
+            ax_ts.set_ylabel(f'{label_prefix} {clim_vars_on_fig[var]}', fontsize=11)
             # Prune boundary ticks to avoid overlap with the RMSD panel when hspace=0.
             ax_ts.yaxis.set_major_locator(MaxNLocator(nbins=5, prune='lower'))
         else:
@@ -751,49 +753,56 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
 
     return fig, axes, ci_rows
 
+def save_timeseries_figure(timeseries, var, pdf_results_dir, out_name, label_prefix='GM'):
+    fig, axes, ci_rows = plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
+                                         method_names_on_fig, var, label_prefix=label_prefix)
+
+    out_csv = os.path.join(pdf_results_dir, f'{out_name}_rmsd_by_period_ci.csv')
+    pd.DataFrame(ci_rows, columns=ci_columns).to_csv(out_csv, index=False)
+    print(f'Saved: {out_csv}', flush=True)
+
+    out_fig = os.path.join(pdf_results_dir, f'{out_name}.pdf')
+    plt.savefig(out_fig, dpi=300, bbox_inches='tight',transparent=True)
+    plt.show()
+    plt.close()
+    print(f'Saved: {out_fig}', flush=True)
+
+
 if __name__ == '__main__':
+
+    # PBDMDC_SKIP_GM=1 makes only the regional figures (leaves gm_{var}.pdf/.csv untouched).
+    skip_gm = os.getenv('PBDMDC_SKIP_GM', '0') == '1'
 
     for lag in requested_lags(lags):
         for start_year, end_year in requested_year_ranges(year_ranges):
 
-            if lag == 3:
-                lag_suffix = ''
-            elif lag == 12:
-                lag_suffix = '_lag12'
-            else:
-                print('lag not recognized')
+            year_suffix, run_suffix = run_suffixes(lag, (start_year, end_year))
 
-            if (start_year, end_year) == (1950, 2014):
-                year_suffix = '_tier1'
-            elif (start_year, end_year) == (1850, 2014):
-                year_suffix = ''
-            else:
-                print('year range not recognized')
-
-            artifact_results_dir = os.path.join(artifact_root, 'evaluation_results', f'results{year_suffix}{lag_suffix}')
-            pdf_results_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
+            artifact_results_dir = results_dir(year_suffix, run_suffix)
+            pdf_results_dir = os.path.join(pdf_root, f'results{year_suffix}{run_suffix}')
             os.makedirs(artifact_results_dir, exist_ok=True)
             os.makedirs(pdf_results_dir, exist_ok=True)
 
-            for var in clim_vars:
-                print(f'\n=== Plotting variable: {var} ===', flush=True)
+            for var in requested_clim_vars(clim_vars):
+                if not skip_gm:
+                    print(f'\n=== Plotting variable: {var} ===', flush=True)
 
-                # Load saved timeseries
-                in_path = os.path.join(artifact_results_dir, f'gm_timeseries_{var}.pkl')
-                with open(in_path, 'rb') as f:
-                    timeseries = pkl.load(f)
+                    # Load saved timeseries
+                    in_path = os.path.join(artifact_results_dir, f'gm_timeseries_{var}.pkl')
+                    with open(in_path, 'rb') as f:
+                        timeseries = pkl.load(f)
 
-                fig, axes, ci_rows = plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig, method_names_on_fig, var)
+                    save_timeseries_figure(timeseries, var, pdf_results_dir, f'gm_{var}')
 
-                out_csv = os.path.join(pdf_results_dir, f'gm_{var}_rmsd_by_period_ci.csv')
-                pd.DataFrame(ci_rows, columns=ci_columns).to_csv(out_csv, index=False)
-                print(f'Saved: {out_csv}', flush=True)
+                # Regional means (R2-L374), written by compute_gm_timeseries for PBDMDC_REGION_VARS.
+                for region in regions:
+                    in_path = os.path.join(artifact_results_dir, f'region_timeseries_{var}_{region}.pkl')
+                    if not os.path.exists(in_path):
+                        print(f'Skipping {var} {region}: {in_path} not found', flush=True)
+                        continue
+                    print(f'\n=== Plotting variable: {var}, region: {region} ===', flush=True)
+                    with open(in_path, 'rb') as f:
+                        timeseries = pkl.load(f)
 
-                    # for ax_col in axes[:, j]:
-                    #     ax_col.set_ylim(y_min, y_max)
-
-                out_fig = os.path.join(pdf_results_dir, f'gm_{var}.pdf')
-                plt.savefig(out_fig, dpi=300, bbox_inches='tight',transparent=True)
-                plt.show()
-                plt.close()
-                print(f'Saved: {out_fig}', flush=True)
+                    save_timeseries_figure(timeseries, var, pdf_results_dir, f'region_{var}_{region}',
+                                           label_prefix=region_labels[region])
