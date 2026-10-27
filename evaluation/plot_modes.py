@@ -270,6 +270,18 @@ def plot_mode_figure(clim_var, chosen_model, d, row_scales):
     fig = plt.figure(figsize=(sum(col_widths) * 3.4, row_height * nrows))
     gs = gridspec.GridSpec(nrows, ncols, width_ratios=col_widths, figure=fig, hspace=map_row_hspace)
 
+    # Map latitude extent: for OSAT, the mask rows that contain data (40S-65N), rounded outward
+    # to 5 degrees, so the whole analysis domain is shown; falls back to the old fixed extent.
+    if clim_var == 'tas_ocean':
+        data_rows = (~nan_mask).any(axis=1)
+        if data_rows.any():
+            map_lat_extent = [max(-90., 5 * np.floor(lat[data_rows].min() / 5)),
+                              min(90., 5 * np.ceil(lat[data_rows].max() / 5))]
+        else:
+            map_lat_extent = [-40, 60]
+    else:
+        map_lat_extent = [-90, 90]
+
     # Second pass: create plots with shared limits
     Lon, Lat = np.meshgrid(lon, lat)
     map_axes = []
@@ -299,10 +311,7 @@ def plot_mode_figure(clim_var, chosen_model, d, row_scales):
         m = ax_map.contourf(Lon, Lat, mode_real,
                             transform=ccrs.PlateCarree(),
                             cmap=map_cmap, levels=np.linspace(-mode_scale_k, mode_scale_k, 11), extend='both')
-        if clim_var == 'tas_ocean':
-            ax_map.set_extent([-180, 180, -40, 60], crs=ccrs.PlateCarree())
-        else:
-            ax_map.set_extent([-180, 180, -90, 90], crs=ccrs.PlateCarree())
+        ax_map.set_extent([-180, 180] + map_lat_extent, crs=ccrs.PlateCarree())
         ax_map.coastlines(linewidth=0.7)
         map_axes.append(ax_map)
         if map_mappable is None:
