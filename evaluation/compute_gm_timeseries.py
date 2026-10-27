@@ -67,6 +67,13 @@ if __name__ == '__main__':
                             return_data_names=True,
                         )
 
+                        # Sort members by name so member i is the same realization for every method
+                        # (os.listdir order differs between methods; needed for paired comparisons).
+                        order = np.argsort(data_names)
+                        preds_pcs = [preds_pcs[i] for i in order]
+                        preds_eofs = [preds_eofs[i] for i in order]
+                        data_names = [data_names[i] for i in order]
+
                         pred_gms = []
                         for pcs, eofs, data_name in zip(preds_pcs, preds_eofs, data_names):
                             reconstructed_flat = pcs @ eofs
@@ -84,6 +91,7 @@ if __name__ == '__main__':
                             'preds': pred_gms,  # list of 1-D arrays, one per ensemble member
                             'truth': truth_gm,
                             'time': time_index,
+                            'data_names': data_names,  # member names, sorted; same order as 'preds'
                         }
 
                 # Save all timeseries for this var / lag / year-range combination

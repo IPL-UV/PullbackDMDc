@@ -4,6 +4,7 @@ import time
 import pickle as pkl
 from utils.data_utils import load_truncated_prediction, load_truth
 from evaluation.utils.metrics import global_mean, global_mean_flat, coord_to_dtindex, smooth_truth
+from evaluation.utils.bootstrap import member_bootstrap_rmsd, paired_difference
 from utils.params import esms, method_names, colors, year_ranges, lags
 import matplotlib.pyplot as plt
 import math
@@ -30,6 +31,161 @@ method_order_on_fig = ['RegGMST', 'LIM-opt', 'LIM',  'PullbackDMDc', 'LR', 'Pull
 
 def display_model_name(model_name):
     return 'MPI-ESM' if model_name == 'MPI-ESM1-2-LR' else model_name
+
+
+volcanic_events = [
+    (1861, 1866, 'Makian'),
+    (1883, 1888, 'Krakatoa'),
+    (1902, 1907, 'Santa María'),
+    (1912, 1917, 'Novarupta'),
+    (1963, 1968, 'Agung'),
+    (1982, 1987, 'El Chichón'),
+    (1991, 1996, 'Pinatubo'),
+]
+
+# Pre-build volcanic mask intervals as Timestamps
+volcanic_intervals = [
+    (pd.Timestamp(f'{v_start}-01-01'), pd.Timestamp(f'{v_end}-01-01'))
+    for v_start, v_end, _ in volcanic_events
+]
+
+
+def is_in_volcanic(t):
+    return any(t_s <= t < t_e for t_s, t_e in volcanic_intervals)
+
+
+ci_columns = ['var', 'model', 'period', 'method', 'n_members', 'rmsd_pct', 'ci_lo', 'ci_hi',
+              'ref_method', 'diff_vs_ref', 'diff_ci_lo', 'diff_ci_hi', 'ref_significantly_better',
+              'member_p2_5', 'member_p97_5']
+
+
+def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, seed):
+    """
+    Grouped bars of pooled RMSD by period (% of truth std) with member-bootstrap 95% CIs.
+    The same member resampling is used for every method and period (paired bootstrap), so a
+    '*' marks methods whose RMSD is significantly higher than the reference PullbackDMDc.
+    Returns one CSV row (dict) per (period, method); the caller adds 'model'.
+    """
+    tick_fontsize = 10
+    ref_method = 'PullbackDMDc-2d' if var == 'psl' else 'PullbackDMDc-3d'
+    n_boot = int(os.getenv('PBDMDC_N_BOOT', '2000'))
+    sig_markers = os.getenv('PBDMDC_SIG_MARKERS', '1') != '0'
+
+    assert not np.ma.is_masked(truth)
+    truth = np.ma.getdata(truth)
+    norm_const = truth.std()
+
+    preds_all = {method: np.array(timeseries_model[method]['preds']) for method in methods}
+    n_members = {preds.shape[0] for preds in preds_all.values()}
+    assert len(n_members) == 1, f'Member counts differ across methods: {n_members}'
+    n_members = n_members.pop()
+
+    # The paired comparison needs member i to be the same realization for every method.
+    member_names = [timeseries_model[method].get('data_names') for method in methods]
+    paired = all(names is not None for names in member_names)
+    if paired:
+        assert all(list(names) == list(member_names[0]) for names in member_names), \
+            'Member order differs across methods'
+    else:
+        print('  WARNING: no data_names in timeseries pickle, member alignment unknown; '
+              'skipping significance test (rerun evaluation.compute_gm_timeseries)', flush=True)
+
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n_members, size=(n_boot, n_members))
+
+    t_arr = np.array(time_index)
+
+    mask_volc = np.array([is_in_volcanic(t) for t in t_arr])
+
+    period_early = (t_arr >= pd.Timestamp('1850-01-01')) & (t_arr < pd.Timestamp('1980-01-01'))
+    mask_early   = period_early & ~mask_volc
+
+    period_late  = (t_arr >= pd.Timestamp('1980-01-01')) & (t_arr < pd.Timestamp('2015-01-01'))
+    mask_late    = period_late & ~mask_volc
+
+    group_labels  = ['Volcanic\nintervals', f'{time_index[0].year}–1980\n(non-volc.)', f'1980–{time_index[-1].year}\n(non-volc.)']
+    group_masks   = [mask_volc, mask_early, mask_late]
+    n_groups      = len(group_labels)
+    n_methods     = len(methods)
+
+    # Point estimates and bootstrap replicates for every (method, period) before drawing,
+    # so the reference replicates are available for the paired comparison.
+    stats = {}
+    for method in methods:
+        preds = preds_all[method]
+        for gi, mask in enumerate(group_masks):
+            if not mask.any():
+                continue
+            point, boot = member_bootstrap_rmsd(preds, truth, mask, norm_const, idx)
+            assert np.isclose(point, np.sqrt(((preds[:, mask] - truth[None, mask]) ** 2).mean()) / norm_const * 100.)
+            member_rmsd = np.sqrt(((preds[:, mask] - truth[None, mask]) ** 2).mean(axis=1)) / norm_const * 100.
+            stats[method, gi] = (point, boot, member_rmsd)
+
+    ax_bar.grid(axis='y', alpha=0.3)
+    ax_bar.set_axisbelow(True)
+
+    bar_width     = 0.8 / n_methods
+    group_centers = np.arange(n_groups)
+
+    rows = []
+    ci_top = 0.0
+    for mi, method in enumerate(methods):
+        x_pos = group_centers + (mi - (n_methods - 1) / 2) * bar_width
+        bar_vals, err_lo, err_hi, stars = [], [], [], []
+        for gi in range(n_groups):
+            if (method, gi) not in stats:
+                bar_vals.append(0.0)
+                err_lo.append(0.0)
+                err_hi.append(0.0)
+                continue
+            point, boot, member_rmsd = stats[method, gi]
+            lo, hi = np.percentile(boot, [2.5, 97.5])
+            bar_vals.append(point)
+            err_lo.append(point - lo)
+            err_hi.append(hi - point)
+            ci_top = max(ci_top, hi)
+
+            diff_vs_ref, diff_lo, diff_hi, ref_better = np.nan, np.nan, np.nan, None
+            if method == ref_method:
+                diff_vs_ref = 0.0
+            elif (ref_method, gi) in stats:
+                diff_vs_ref = point - stats[ref_method, gi][0]
+                if paired:
+                    diff_lo, diff_hi, ref_better = paired_difference(boot, stats[ref_method, gi][1])
+                    if ref_better:
+                        stars.append((x_pos[gi], hi))
+
+            member_lo, member_hi = np.percentile(member_rmsd, [2.5, 97.5])
+            rows.append({'var': var, 'period': group_labels[gi].replace('\n', ' '), 'method': method,
+                         'n_members': n_members, 'rmsd_pct': point, 'ci_lo': lo, 'ci_hi': hi,
+                         'ref_method': ref_method, 'diff_vs_ref': diff_vs_ref,
+                         'diff_ci_lo': diff_lo, 'diff_ci_hi': diff_hi,
+                         'ref_significantly_better': ref_better,
+                         'member_p2_5': member_lo, 'member_p97_5': member_hi})
+
+        ax_bar.bar(
+            x_pos, bar_vals,
+            yerr=[err_lo, err_hi],
+            width=bar_width * 0.9,
+            color=colors[method],
+            edgecolor='black',
+            linewidth=0.4,
+            zorder=1,
+            error_kw=dict(elinewidth=0.6, capsize=1.5, ecolor='black'),
+        )
+        if sig_markers:
+            for x_star, y_star in stars:
+                ax_bar.annotate('*', xy=(x_star, y_star), xytext=(0, 0.5), textcoords='offset points',
+                                ha='center', va='bottom', fontsize=8)
+
+    if ci_top > 0:
+        ax_bar.set_ylim(0, ci_top * 1.12)
+    ax_bar.set_xticks(group_centers)
+    ax_bar.set_xticklabels(group_labels, fontsize=tick_fontsize)
+    ax_bar.tick_params(axis='x', labelsize=tick_fontsize)
+    ax_bar.tick_params(axis='y', labelsize=tick_fontsize)
+
+    return rows
 
 
 
@@ -359,22 +515,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
     n_rows = math.ceil(n_models / n_cols)
     window_size = 12 * 3
 
-    volcanic_events = [
-        (1861, 1866, 'Makian'),
-        (1883, 1888, 'Krakatoa'),
-        (1902, 1907, 'Santa María'),
-        (1912, 1917, 'Novarupta'),
-        (1963, 1968, 'Agung'),
-        (1982, 1987, 'El Chichón'),
-        (1991, 1996, 'Pinatubo'),
-    ]
     volcanic_color = '#b0c4de'
-
-    # Pre-build volcanic mask intervals as Timestamps
-    volcanic_intervals = [
-        (pd.Timestamp(f'{v_start}-01-01'), pd.Timestamp(f'{v_end}-01-01'))
-        for v_start, v_end, _ in volcanic_events
-    ]
 
     # Keep x independent because row 3 uses categorical x; do not share y-axis
     # so each panel has independent y-scaling (especially for bottom row bar charts).
@@ -415,9 +556,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
                 color=volcanic_color, alpha=0.35, zorder=0, linewidth=0,
             )
 
-    def is_in_volcanic(t):
-        return any(t_s <= t < t_e for t_s, t_e in volcanic_intervals)
-
+    ci_rows = []
     for j, model in enumerate(esms):
         print(f'\nPlotting model: {model}', flush=True)
 
@@ -517,64 +656,12 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
             ax_rmsd.tick_params(axis='y', left=False, labelleft=False)
 
         
-        # ── Bottom panel: grouped box plot (per-member RMSD) ────────────────
-        t_arr = np.array(time_index)
-
-        mask_volc = np.array([is_in_volcanic(t) for t in t_arr])
-
-        period_early = (t_arr >= pd.Timestamp('1850-01-01')) & (t_arr < pd.Timestamp('1980-01-01'))
-        mask_early   = period_early & ~mask_volc
-
-        period_late  = (t_arr >= pd.Timestamp('1980-01-01')) & (t_arr < pd.Timestamp('2015-01-01'))
-        mask_late    = period_late & ~mask_volc
-
-        group_labels  = ['Volcanic\nintervals', f'{time_index[0].year}–1980\n(non-volc.)', f'1980–{time_index[-1].year}\n(non-volc.)']
-        group_masks   = [mask_volc, mask_early, mask_late]
-        n_groups      = len(group_labels)
-        n_methods     = len(methods_plot_order)
-
-        ax_bar.grid(axis='y', alpha=0.3)
-        ax_bar.set_axisbelow(True)
-
-        box_width     = 0.8 / n_methods
-        group_centers = np.arange(n_groups)
-
-        for mi, method in enumerate(methods_plot_order):
-            preds = np.array(timeseries[model][method]['preds'])
-            box_data, box_pos = [], []
-            for gi, mask in enumerate(group_masks):
-                if not mask.any():
-                    continue
-                # One RMSD per ensemble member over this group's time steps.
-                member_rmsd = np.sqrt(
-                    ((preds[:, mask] - truth_gm[None, mask]) ** 2).mean(axis=1)
-                ) / norm_const * 100.
-                box_data.append(member_rmsd)
-                box_pos.append(group_centers[gi] + (mi - (n_methods - 1) / 2) * box_width)
-
-            bp = ax_bar.boxplot(
-                box_data,
-                positions=box_pos,
-                widths=box_width * 0.9,
-                whis=(0, 100),  # whiskers span min-max across members
-                patch_artist=True,
-                showfliers=False,
-                manage_ticks=False,
-                boxprops=dict(linewidth=0.4),
-                whiskerprops=dict(linewidth=0.6),
-                capprops=dict(linewidth=0.6),
-                medianprops=dict(color='black', linewidth=0.8),
-            )
-            for patch in bp['boxes']:
-                patch.set_facecolor(colors[method])
-                patch.set_alpha(alphas.get(method, 1.0))
-                patch.set_zorder(1)
-
-        ax_bar.set_ylim(bottom=0)
-        ax_bar.set_xticks(group_centers)
-        ax_bar.set_xticklabels(group_labels, fontsize=tick_fontsize)
-        ax_bar.tick_params(axis='x', labelsize=tick_fontsize)
-        ax_bar.tick_params(axis='y', labelsize=tick_fontsize)
+        # ── Bottom panel: grouped bar chart with bootstrap CIs ──────────────
+        rows = draw_rmsd_bars(ax_bar, timeseries[model], methods_plot_order, truth_gm, time_index, var,
+                              seed=20260 + j)
+        for row in rows:
+            row['model'] = model
+        ci_rows += rows
         if col == 0:
             ax_bar.set_ylabel('RMSD by period (%)', fontsize=10)
         
@@ -641,6 +728,15 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
     legend_handles.append(
         mlines.Line2D([], [], color='black', linewidth=2.0, linestyle=':', label='Ground truth')
     )
+    legend_handles.append(
+        mlines.Line2D([], [], color='black', linestyle='none', marker='|', markersize=10,
+                      markeredgewidth=1.0, label='95% CI (member bootstrap)')
+    )
+    if os.getenv('PBDMDC_SIG_MARKERS', '1') != '0':
+        legend_handles.append(
+            mlines.Line2D([], [], color='black', linestyle='none', marker='$*$', markersize=8,
+                          label='PullbackDMDc significantly lower RMSD')
+        )
 
     fig.legend(
         handles=legend_handles,
@@ -653,7 +749,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
     fig.tight_layout(rect=[0, 0.06, 1, 1], h_pad=0.0)
     fig.subplots_adjust(hspace=0.0, wspace=0.10)
 
-    return fig, axes
+    return fig, axes, ci_rows
 
 if __name__ == '__main__':
 
@@ -687,7 +783,11 @@ if __name__ == '__main__':
                 with open(in_path, 'rb') as f:
                     timeseries = pkl.load(f)
 
-                fig, axes = plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig, method_names_on_fig, var)
+                fig, axes, ci_rows = plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig, method_names_on_fig, var)
+
+                out_csv = os.path.join(pdf_results_dir, f'gm_{var}_rmsd_by_period_ci.csv')
+                pd.DataFrame(ci_rows, columns=ci_columns).to_csv(out_csv, index=False)
+                print(f'Saved: {out_csv}', flush=True)
 
                     # for ax_col in axes[:, j]:
                     #     ax_col.set_ylim(y_min, y_max)
