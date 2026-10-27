@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 
 CLIM_VAR_LABELS = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
 
+from evaluation.utils.members import SELECTED_HANDLE, mark_selected, selected_index
 from utils.params import esms, colors, method_markers, predictions_dir
 
 method_names_on_fig = {
@@ -76,7 +77,7 @@ def remove_outliers_iqr(values, iqr_multiplier=1.5):
 def load_eig_data(clim_var, methods, top_n, base_pred_dir):
     """Return dict: model -> method -> list of (decay_time, frequency) arrays."""
     clim_dir = os.path.join(base_pred_dir, clim_var)
-    data = {model: {method: {'decay': [], 'freq': []} for method in methods} for model in esms}
+    data = {model: {method: {'decay': [], 'freq': [], 'files': []} for method in methods} for model in esms}
 
     for model in esms:
         model_dir = os.path.join(clim_dir, model)
@@ -107,6 +108,7 @@ def load_eig_data(clim_var, methods, top_n, base_pred_dir):
 
             data[model][method]['decay'].append(decay_times)
             data[model][method]['freq'].append(frequencies)
+            data[model][method]['files'].append(f_name)
 
     return data
 
@@ -161,6 +163,13 @@ def plot_combined_transposed(data, methods, model_order, top_n, title):
                     x_vals.append(values)
                     y_vals.append(np.full(values.size, pos + offset) + jitter)
 
+                    # Member shown in the mode figures, if it survived the filters above.
+                    sel = selected_index(data[model][method]['files'], model)
+                    if sel is not None and len(member_arrays[sel]) > mode_idx:
+                        sel_value = member_arrays[sel][mode_idx]
+                        if np.isfinite(sel_value) and np.isin(sel_value, values):
+                            mark_selected(ax, sel_value, pos + offset, 0.07)
+
                 if x_vals:
                     ax.scatter(
                         np.concatenate(x_vals),
@@ -191,11 +200,11 @@ def plot_combined_transposed(data, methods, model_order, top_n, title):
     seen = set()
     unique = [(h, l) for h, l in zip(handles, labels) if not (l in seen or seen.add(l))]
     fig.legend(
-        [h for h, _ in unique],
-        [method_names_on_fig.get(l, l) for _, l in unique],
+        [h for h, _ in unique] + [SELECTED_HANDLE],
+        [method_names_on_fig.get(l, l) for _, l in unique] + [SELECTED_HANDLE.get_label()],
         title='Method',
         loc='lower center',
-        ncol=len(unique),
+        ncol=len(unique) + 1,
         frameon=True,
         facecolor=None,
         edgecolor='#9e9e9e',

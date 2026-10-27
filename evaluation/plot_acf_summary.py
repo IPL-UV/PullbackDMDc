@@ -4,7 +4,8 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 
-from utils.params import artifact_root, esms, method_markers, pdf_root
+from evaluation.utils.members import SELECTED_HANDLE, acf_selected_index, mark_selected
+from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
 
 CLIM_VAR_LABELS = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
  
@@ -52,8 +53,10 @@ def compute_member_mode_timescales(member_acfs, top_n, dt_years):
     return np.asarray(member_timescales, dtype=float)
 
 
-def load_timescale_summaries(clim_vars, results_dir, top_n, dt_years):
+def load_timescale_summaries(clim_vars, results_dir, top_n, dt_years, base_pred_dir):
+    """Per var: timescales by model, and the row of the member shown in the mode figures."""
     summary_by_var = {}
+    selected_by_var = {}
 
     for clim_var in clim_vars:
         if clim_var  == 'psl':
@@ -69,6 +72,7 @@ def load_timescale_summaries(clim_vars, results_dir, top_n, dt_years):
             acf_data = pickle.load(file_handle)
 
         summary_by_model = {}
+        selected_by_model = {}
         for model_name in esms:
             model_member_acfs = acf_data.get(model_name, [])
             summary_by_model[model_name] = compute_member_mode_timescales(
@@ -76,14 +80,20 @@ def load_timescale_summaries(clim_vars, results_dir, top_n, dt_years):
                 top_n=top_n,
                 dt_years=dt_years,
             )
+            if model_member_acfs:
+                selected_by_model[model_name] = acf_selected_index(
+                    os.path.join(base_pred_dir, clim_var, model_name), chosen_method, model_name,
+                    model_member_acfs, top_n=200 if clim_var == 'psl' else 20)
 
         summary_by_var[clim_var] = summary_by_model
+        selected_by_var[clim_var] = selected_by_model
 
-    return summary_by_var
+    return summary_by_var, selected_by_var
 
 
 def plot_mode_timescale_scatter_grid(
     summary_by_var,
+    selected_by_var,
     clim_vars,
     top_n,
     timescale_bands,
@@ -143,6 +153,12 @@ def plot_mode_timescale_scatter_grid(
                     zorder=3,
                 )
 
+                sel = selected_by_var[clim_var].get(model_name)
+                if sel is not None:
+                    sel_value = summary_by_model[model_name][sel, mode_idx]
+                    if np.isfinite(sel_value) and sel_value > 0.0:
+                        mark_selected(ax, sel_value, pos, 0.15)
+
             if row_idx == 0:
                 ax.set_title(f'Mode {mode_idx + 1}', fontsize=13)
 
@@ -172,6 +188,8 @@ def plot_mode_timescale_scatter_grid(
         ax.set_xlabel('Years', fontsize=12)
 
     fig.suptitle('Dominant time scale', fontsize=18)
+    fig.legend(handles=[SELECTED_HANDLE], loc='lower center', bbox_to_anchor=(0.5, -0.04), frameon=False,
+               fontsize=11)
     return fig
 
 
@@ -207,11 +225,12 @@ def main():
     clim_var_to_method = {cv: ('PullbackDMDc-2d' if cv == 'psl' else 'PullbackDMDc-3d') for cv in clim_vars}
     clim_var_to_marker = {cv: method_markers.get(m, 'o') for cv, m in clim_var_to_method.items()}
 
-    summary_by_var = load_timescale_summaries(
+    summary_by_var, selected_by_var = load_timescale_summaries(
         clim_vars=clim_vars,
         results_dir=artifact_results_dir,
         top_n=top_n,
         dt_years=dt_years,
+        base_pred_dir=predictions_dir(year_suffix, lag_suffix),
     )
 
     available_clim_vars = [clim_var for clim_var in clim_vars if clim_var in summary_by_var]
@@ -221,6 +240,7 @@ def main():
 
     fig = plot_mode_timescale_scatter_grid(
         summary_by_var=summary_by_var,
+        selected_by_var=selected_by_var,
         clim_vars=available_clim_vars,
         top_n=top_n,
         timescale_bands=timescale_bands,

@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
+from evaluation.utils.members import (SELECTED_HANDLE, acf_selected_index, mark_selected, method_files,
+                                      selected_index)
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
 
 
@@ -266,7 +268,11 @@ def plot_summary_figure(
     chosen_method,
     results_dir,
     smooth_sigma,
+    selected_acf,
+    selected_sorted,
 ):
+    """selected_acf / selected_sorted: model -> member index of the member shown in the mode figures, in
+    ACF-pickle order (row 1) and sorted-file order (rows 2-3)."""
     top_n = 4
     rng = np.random.default_rng(0)
 
@@ -311,6 +317,7 @@ def plot_summary_figure(
         {
             'title': 'Dominant Time Scale\n(years)',
             'data': row1_timescales,
+            'selected': selected_acf,
             'xscale': 'linear',
             'xlabel': 'Years',
             'valid': lambda x: np.isfinite(x) & (x > 0),
@@ -319,6 +326,7 @@ def plot_summary_figure(
         {
             'title': f'Variance of Smoothed\nInternal Variability ({field_unit}$^2$)',
             'data': row2_smoothed_var,
+            'selected': selected_sorted,
             'xscale': 'linear',
             'xlabel': rf'Var of smoothed $w\,\tilde{{z}}(t)$ [{field_unit}$^2$]',
             'valid': lambda x: np.isfinite(x) & (x > 0),
@@ -327,6 +335,7 @@ def plot_summary_figure(
         {
             'title': 'Fraction of Variance\nForced Timeseries',
             'data': row3_forced_fraction,
+            'selected': selected_sorted,
             'xscale': 'linear',
             'xlabel': 'Fraction',
             'valid': lambda x: np.isfinite(x),
@@ -382,6 +391,15 @@ def plot_summary_figure(
                     zorder=3,
                 )
 
+                sel = row_cfg['selected'].get(chosen_model)
+                if sel is not None and metric_members[sel].size > mode_idx:
+                    sel_value = np.array([metric_members[sel][mode_idx]], dtype=float)
+                    sel_valid = row_cfg['valid'](sel_value)
+                    if row_idx == 1 and bounds is not None:
+                        sel_valid = sel_valid & (sel_value >= lower) & (sel_value <= upper)
+                    if sel_valid[0]:
+                        mark_selected(ax, sel_value[0], pos, 0.18)
+
             ax.set_xscale(row_cfg['xscale'])
             if row_cfg['xlim'] is not None:
                 ax.set_xlim(*row_cfg['xlim'])
@@ -409,6 +427,8 @@ def plot_summary_figure(
     )
 
     fig.suptitle(f'{clim_vars_on_fig[clim_var]}: Robustness', fontsize=18)
+    fig.legend(handles=[SELECTED_HANDLE], loc='lower center', bbox_to_anchor=(0.5, -0.03), frameon=False,
+               fontsize=11)
 
     out_path = os.path.join(
         results_dir,
@@ -474,6 +494,18 @@ def main():
             smooth_sigma=smooth_sigma,
         )
 
+        # Member shown in the mode figures: ACF rows follow os.listdir order, rows 2-3 sorted file order.
+        selected_acf, selected_sorted = {}, {}
+        for chosen_model in esms:
+            model_dir = os.path.join(base_pred_dir, clim_var, chosen_model)
+            if acf_data.get(chosen_model):
+                selected_acf[chosen_model] = acf_selected_index(
+                    model_dir, chosen_method, chosen_model, acf_data[chosen_model],
+                    top_n=200 if clim_var == 'psl' else 20)
+            files = method_files(model_dir, chosen_method, sort=True)
+            assert len(files) == len(row2_smoothed_var[chosen_model]), f'{chosen_model}: member count mismatch'
+            selected_sorted[chosen_model] = selected_index(files, chosen_model)
+
         out_path = plot_summary_figure(
             row1_timescales=row1_timescales,
             row2_smoothed_var=row2_smoothed_var,
@@ -482,6 +514,8 @@ def main():
             chosen_method=chosen_method,
             results_dir=pdf_results_dir,
             smooth_sigma=smooth_sigma,
+            selected_acf=selected_acf,
+            selected_sorted=selected_sorted,
         )
         print(f'Saved: {out_path}')
 

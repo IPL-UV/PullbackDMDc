@@ -12,6 +12,8 @@ import glob
 from utils.data_utils import undo_lat_scaling
 from utils.params import predictions_dir
 from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
+from evaluation.utils.members import SELECTED_MEMBERS
 
 # Helper functions from eigs_vis.py
 def compute_yearly_decay_time(lambdas, tau):
@@ -214,6 +216,15 @@ if __name__ == "__main__":
                 color=rank_to_color(r)
             )
 
+        # Eigenvalues of the member shown in the mode figures.
+        selected = SELECTED_MEMBERS.get(model, '')
+        if selected:
+            ssub = model_sub[model_sub['Ensemble Member'] == selected]
+            if ssub.empty:
+                raise ValueError(f'{model}: no eigenvalues for selected member {selected!r}')
+            ax.scatter(ssub['Eigenvalue Real'], ssub['Eigenvalue Imag'], s=18, facecolors='none',
+                       edgecolors='black', linewidths=0.6, zorder=4)
+
         ax.plot(np.cos(theta), np.sin(theta), color='black', ls='--', lw=1.4)
         ax.axhline(0, color='0.7', lw=0.8)
         ax.axvline(0, color='0.7', lw=0.8)
@@ -229,12 +240,14 @@ if __name__ == "__main__":
         Patch(facecolor='tab:blue', edgecolor='tab:blue', alpha=0.4, label='Rank 1-2'),
         Patch(facecolor='tab:orange', edgecolor='tab:orange', alpha=0.4, label='Rank 3-4'),
         Patch(facecolor='tab:gray', edgecolor='tab:gray', alpha=0.4, label='Rank 5+'),
+        Line2D([], [], linestyle='None', marker='o', markerfacecolor='none', markeredgecolor='black',
+               markersize=5, label='Member shown in mode figures'),
     ]
     fig.legend(
         handles=legend_handles,
         title='Decay Rank Group',
         loc='lower center',
-        ncol=3,
+        ncol=4,
         frameon=False,
         bbox_to_anchor=(0.5, -0.25)
     )

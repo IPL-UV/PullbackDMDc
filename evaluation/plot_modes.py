@@ -8,6 +8,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker
 from utils.data_utils import undo_lat_scaling
+from evaluation.utils.members import SELECTED_MEMBERS
 from utils.params import artifact_root, pdf_root, predictions_dir
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.gridspec as gridspec
@@ -33,13 +34,8 @@ clim_vars = ['tas', 'tas_ocean', 'psl']
 
 chosen_model = '20CRv3'
 chosen_member = ''
-esm_list = [
-    ('20CRv3', ''),
-    ('MPI-ESM1-2-LR', 'r47i1p1f1'),
-    ('CESM2', '1281.005i1p1f1'),
-    ('CanESM5','r16i1p1f1'),
-    ('MIROC6', 'r35i1p1f1')
-]
+# (dataset, member) shown per figure; members are defined once in evaluation/utils/members.py.
+esm_list = list(SELECTED_MEMBERS.items())
 
 clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
 

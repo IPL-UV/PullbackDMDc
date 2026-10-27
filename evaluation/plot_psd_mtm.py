@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal.windows import dpss
 
+from evaluation.utils.members import SELECTED_MEMBERS
 from utils.params import esms, predictions_dir
 
 
@@ -98,13 +99,7 @@ esm_colors = {
 model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
 
 # Match the member selection used in plot_modes.py
-esm_member_selection = {
-    '20CRv3': '',
-    'MPI-ESM1-2-LR': 'r47i1p1f1',
-    'CESM2': '1281.005i1p1f1',
-    'CanESM5': 'r16i1p1f1',
-    'MIROC6': 'r35i1p1f1',
-}
+esm_member_selection = SELECTED_MEMBERS
 
 # Use distinct line styles so ESM curves are distinguishable even in grayscale.
 esm_linestyles = {

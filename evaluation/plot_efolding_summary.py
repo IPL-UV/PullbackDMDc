@@ -7,6 +7,8 @@ from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
+from evaluation.utils.members import (SELECTED_HANDLE, acf_selected_index, mark_selected, method_files,
+                                      selected_index)
 from evaluation.utils.timescales import efolding_time, zero_crossing_time, eig_decay_time_years
 from utils.params import artifact_root, esms, pdf_root, predictions_dir, requested_clim_vars
 
@@ -94,6 +96,11 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
                     color_kw = {'edgecolors': color} if style.get('facecolors') == 'none' else {'color': color}
                     ax.scatter(values, np.full(values.size, pos + offset) + jitter,
                                s=14, alpha=alpha, linewidths=0.8, zorder=3, **style, **color_kw)
+                    sel = timescales_by_model[model_name].get('selected', {}).get(key)
+                    if sel is not None:
+                        sel_value = timescales_by_model[model_name][key][sel, mode_idx]
+                        if np.isfinite(sel_value) and sel_value > 0.0:
+                            mark_selected(ax, sel_value, pos + offset, 0.1)
 
             if row_idx == 0:
                 ax.set_title(f'Mode {mode_idx + 1}', fontsize=13)
@@ -122,8 +129,8 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
         Line2D([0], [0], linestyle='None', color='black', markerfacecolor='none' if style.get('facecolors') == 'none' else 'black',
                marker=style['marker'], markersize=6, label=label)
         for _, label, style, _ in QUANTITIES
-    ]
-    fig.legend(handles=legend_handles, loc='lower center', ncol=3, fontsize=11,
+    ] + [SELECTED_HANDLE]
+    fig.legend(handles=legend_handles, loc='lower center', ncol=4, fontsize=11,
                bbox_to_anchor=(0.5, -0.04), frameon=False)
     fig.suptitle('Time scales of the leading dynamic modes', fontsize=18)
     return fig
@@ -185,8 +192,14 @@ def main():
             if model_name not in timescales_by_model:
                 continue
             print(f'{clim_var} {model_name}: eigenvalues', flush=True)
-            timescales_by_model[model_name]['eigdecay'] = eig_decay_times(
-                os.path.join(base_pred_dir, clim_var, model_name), method, top_n)
+            model_dir = os.path.join(base_pred_dir, clim_var, model_name)
+            timescales_by_model[model_name]['eigdecay'] = eig_decay_times(model_dir, method, top_n)
+            # Member shown in the mode figures: ACF rows follow os.listdir order, eig_decay_times sorted order.
+            acf_idx = acf_selected_index(model_dir, method, model_name, acf_data[model_name],
+                                         top_n=200 if clim_var == 'psl' else 20)
+            timescales_by_model[model_name]['selected'] = {
+                'efold': acf_idx, 'zero4': acf_idx,
+                'eigdecay': selected_index(method_files(model_dir, method, sort=True), model_name)}
         timescales_by_var[clim_var] = timescales_by_model
 
     available_clim_vars = [cv for cv in clim_vars if cv in timescales_by_var]
