@@ -21,7 +21,7 @@ class Config:
     variances: Tuple[float, ...] = (1., 1, 1, 0.99, 0.01)  # V_f : V_1 : V_p : V_c : V_eps
     delta: float = 0.2  # depth of the forcing's 1965 dip
     alpha: float = 0.0  # overlap of the complement modes with w1; 0: orthogonal
-    spin_up_factor: float = 1000  # spin-up in units of the slowest decay time
+    spin_up_factor: float = 100  # spin-up in units of the slowest decay time
     w_seed: int = 22
     eig_seed: int = 20
     tau_pair: float = 1.5  # fast pair decay time (yr)

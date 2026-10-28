@@ -29,11 +29,11 @@ from synthetic_generator import make_setup
 CFG = DEFAULT              # the configuration drawn; e.g. CFG = replace(DEFAULT, variances=(1, 0.33, 0.33, 0.33, 0.01))
 SETUP_DELTAS = (0.2, 0.5)  # the dip depths of setup.pdf
 N_FIT = 1000               # realizations PullbackDMDc is fitted to
-N_SHOWN = 1000             # estimated forced responses drawn in panel (a) of pullback_results.pdf
-N_INTERNAL = 3             # realizations of slow internal variability drawn in panel (a)
+N_SHOWN = 100             # estimated forced responses drawn in panel (a) of pullback_results.pdf
+N_INTERNAL = 5             # realizations of slow internal variability drawn in panel (a)
 DATA_FILE = "plot_data.npz"
 TRUE_COLOR, ESTIMATE_COLOR, MEDIAN_COLOR = "k", "#0072B2", "#D55E00"   # the same in every panel
-SLOW_INTERNAL_COLORS = ("#009E73", "#CC79A7", "#7570B3")               # one per realization of slow internal variability
+SLOW_INTERNAL_COLORS = ("tab:orange", "tab:purple", "tab:green", "tab:red", "tab:pink")               # one per realization of slow internal variability
 STYLE = {"font.size": 12, "legend.fontsize": 10}                       # large text on small figures
 
 
