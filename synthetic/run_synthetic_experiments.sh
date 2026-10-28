@@ -12,17 +12,14 @@ export MPLBACKEND=Agg
 cd "$(dirname "$(readlink -f "$0")")"
 
 echo "=== ablation runs ==="
-python run_ablation_studies.py --n-jobs 12                  # results/delta0.15/
-python run_ablation_studies.py --set delta=0.5 --n-jobs 12   # results/delta0.5/
+# uncomment to rerun experiments
+#for delta in 0.2 0.5; do
+#    python run_ablation_studies.py --set delta=$delta --n-jobs $SLURM_CPUS_PER_TASK
+#done
 
 echo "=== run figures ==="
-python plot_ablation_run_results.py --runs delta0.15
-python plot_ablation_run_results.py --runs delta0.15 delta0.5
-python plot_ablation_run_results.py --runs delta0.15 --metric corr
-python plot_ablation_run_results.py --runs delta0.15 delta0.5 --metric corr
-python plot_ablation_run_results.py --runs delta0.15 --metric r2
-python plot_ablation_run_results.py --runs delta0.15 delta0.5 --metric r2
+python plot_ablation_run_results.py --deltas 0.2 0.5
 
 echo "=== generator diagnostics ==="
-python plot_generator_diagnostics.py
-python plot_generator_diagnostics.py --set delta=0.5
+#uncomment to rerun generator diagnostics (1000 realizations, takes time)
+#python plot_generator_diagnostics.py

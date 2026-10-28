@@ -1,10 +1,6 @@
 """Every tunable value of the synthetic ablations, in one frozen dataclass.
 
-The system fields are the keyword arguments of synthetic_generator.generate_ensemble, under the same names.
-Override from the command line with `--set key=value ...`, e.g.
-    python run_ablation_studies.py --name slow50 --set tau1=50
-    python run_ablation_studies.py --set delta=0.5                               # a deeper dip: results/delta0.5/
-    python plot_generator_diagnostics.py --set "variances=(1, 1, 1, 0.9, 0.5)"
+The system fields are the keyword arguments of synthetic_generator.generate_ensemble, under the same names."
 """
 
 import ast
@@ -22,10 +18,10 @@ FIGURES_DIR = SYNTHETIC_DIR / "figures"
 class Config:
     # --- system: generate_ensemble's arguments (see synthetic_generator.py) -------------------
     tau1: float = 20  # slow mode decay time (yr)
-    variances: Tuple[float, ...] = (1, 1, 1, 0.9, 0.1)  # V_f : V_1 : V_p : V_c : V_eps
-    delta: float = 0.15  # depth of the forcing's 1965 dip
+    variances: Tuple[float, ...] = (1., 1, 1, 0.99, 0.01)  # V_f : V_1 : V_p : V_c : V_eps
+    delta: float = 0.2  # depth of the forcing's 1965 dip
     alpha: float = 0.0  # overlap of the complement modes with w1; 0: orthogonal
-    spin_up_factor: float = 100  # spin-up in units of the slowest decay time
+    spin_up_factor: float = 1000  # spin-up in units of the slowest decay time
     w_seed: int = 22
     eig_seed: int = 20
     tau_pair: float = 1.5  # fast pair decay time (yr)
@@ -34,14 +30,14 @@ class Config:
 
     # --- realizations -----------------------------------------------------------------------
     noise_seed: int = 0
-    n_realizations: int = 100
+    n_realizations: int = 1000
 
     # --- sweep levels -----------------------------------------------------------------------
-    total_snrs: Tuple[float, ...] = (1 / 100, 1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30, 100)
+    total_snrs: Tuple[float, ...] = (1 / 30, 1 / 10, 1 / 3, 1, 3, 10, 30)
     partial_snr_factors: Tuple[float, ...] = (1 / 4, 1 / 2, 1, 2, 4)
-    slow_timescales_yr: Tuple[float, ...] = (1, 2, 5, 10, 20, 40, 70, 100)
-    obs_noise_ratios: Tuple[float, ...] = (0.003, 0.01, 0.03, 0.1, 0.3, 1, 3)  # V_eps / V_f
-    alphas: Tuple[float, ...] = (0, 0.3, 0.5, 0.7, 0.9, 0.99)
+    slow_timescales_yr: Tuple[float, ...] = (1, 2, 5, 10, 20, 40, 80)
+    obs_noise_ratios: Tuple[float, ...] = (0.0001, 0.001, 0.01, 0.1, 1, 10)  # V_eps / V_f
+    alphas: Tuple[float, ...] = (0, 0.3, 0.5, 0.7, 0.9, 0.95, 0.96,0.97,0.99)
 
     # --- methods ----------------------------------------------------------------------------
     lag: int = 1
