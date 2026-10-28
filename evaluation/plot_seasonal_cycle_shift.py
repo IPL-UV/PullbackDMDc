@@ -16,19 +16,22 @@ from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
 from scipy.ndimage import gaussian_filter1d
 
 from evaluation.plot_gm_timeseries import units
-from evaluation.utils.metrics import coord_to_dtindex, lat_flat_from_pars, regional_mean, regional_mean_flat
+from evaluation.utils.metrics import coord_to_dtindex, global_mean_flat, lat_flat_from_pars, regional_mean
 from utils.data_utils import load_truth, undo_lat_scaling
-from utils.params import (artifact_root, pdf_root, predictions_dir, regions, requested_lags,
-                          requested_year_ranges, run_suffixes)
+from utils.params import (artifact_root, pdf_root, predictions_dir, requested_lags, requested_year_ranges,
+                          run_suffixes)
 
 obs = '20CRv3'
 panels = [('SAT N of 65°N', 'tas', 'n65', 'PullbackDMDc-3d'),
-          ('SLP S of 65°S', 'psl', 's65', 'PullbackDMDc-2d')]
+          ('SLP N Pacific', 'psl', 'npac', 'PullbackDMDc-2d')]
+# (lat_min, lat_max, lon_min, lon_max); npac covers the negative DJF-JJA SLP trend of the North Pacific.
+boxes = {'n65': (65, 90, 0, 360), 'npac': (25, 45, 135, 195)}
 var_names = {'tas': 'SAT', 'psl': 'SLP'}
 mode_ks = [2, 3]  # modes 3 and 4
 smooth_sigma_years = 8  # as internal_smooth_sigma in plot_modes.py
 per_century = 100.0
 map_cmap = 'RdBu_r'
+n_perm = 1000
 
 season_hues = {'DJF': '#0072B2', 'MAM': '#009E73', 'JJA': '#D55E00', 'SON': '#CC79A7'}
 season_months = {'DJF': [11, 0, 1], 'MAM': [2, 3, 4], 'JJA': [5, 6, 7], 'SON': [8, 9, 10]}
@@ -58,6 +61,30 @@ def ols_trend(years, Y):
     return slope * per_century, se * per_century
 
 
+def permutation_significance(years, C, trend):
+    """True where |trend| exceeds 95% of the trends with permuted years.
+
+    DJF trend - JJA trend is the trend of C = DJF - JJA, so one trend per permutation suffices.
+    """
+    rng = np.random.default_rng(0)
+    n = len(years)
+    t = years - years.mean()
+    perms = np.stack([rng.permutation(n) for _ in range(n_perm)])
+    Cc = (C - C.mean(axis=0)).reshape(n, -1)
+    null = (t[perms] @ Cc) / (t @ t) * per_century
+    return np.abs(trend) > np.percentile(np.abs(null), 95, axis=0).reshape(trend.shape)
+
+
+def box_stats(lat, lon, trend, significant, box):
+    lat0, lat1, lon0, lon1 = box
+    rows = (lat >= lat0) & (lat <= lat1)
+    cols = (lon % 360 >= lon0) & (lon % 360 <= lon1)
+    tr, sig = trend[rows][:, cols], significant[rows][:, cols]
+    w = np.cos(np.deg2rad(lat[rows]))[:, None] * np.ones_like(tr)
+    mean = np.nansum(w * tr) / np.sum(w[np.isfinite(tr)])
+    return mean, np.mean(sig & (np.sign(tr) == np.sign(mean)))
+
+
 def load_fit(var, method, year_suffix, run_suffix):
     model_dir = os.path.join(predictions_dir(year_suffix, run_suffix), var, obs)
     files = [f for f in os.listdir(model_dir) if f.split('_')[-1].split('.')[0] == method]
@@ -73,12 +100,27 @@ def load_fit(var, method, year_suffix, run_suffix):
 def components(var, region, dmd, pars, year_suffix):
     """Regional mean of the raw reanalysis and of the forced estimate, as in compute_gm_timeseries."""
     truth, lat = load_truth(var, obs, os.path.join(artifact_root, f'means{year_suffix}'), return_lats=True)
-    raw = np.ma.getdata(regional_mean(truth, lat, *regions[region])).astype(float)
+    raw = box_mean(truth, lat, truth['lon'].values, boxes[region])
     # Same reconstruction as load_truncated_prediction.
     svals = np.sqrt((dmd.eofs ** 2).sum(axis=-1))
     recon = (dmd.fr_pcs.real * svals) @ (dmd.eofs / svals[:, None])
-    forced = regional_mean_flat(recon, pars['resc_coef_flat'], lat_flat_from_pars(pars), *regions[region])
+    forced = box_mean_flat(recon, pars, boxes[region])
     return coord_to_dtindex(truth.time), {'raw': raw, 'forced': forced, 'internal': raw - forced}
+
+
+def box_mean(truth, lat, lon, box):
+    lat0, lat1, lon0, lon1 = box
+    sel = (lon % 360 >= lon0) & (lon % 360 <= lon1)
+    return np.ma.getdata(regional_mean(truth.to_masked_array()[..., sel], lat, lat0, lat1)).astype(float)
+
+
+def box_mean_flat(data_flat, pars, box):
+    lat0, lat1, lon0, lon1 = box
+    lat_flat = lat_flat_from_pars(pars)
+    lon_flat = np.repeat(pars['lon'].values[None, :], pars['lat'].size, axis=0)[~pars['nan_mask']] % 360
+    sel = (lat_flat >= lat0) & (lat_flat <= lat1) & (lon_flat >= lon0) & (lon_flat <= lon1)
+    assert sel.any(), f'No grid points in {box}'
+    return global_mean_flat(data_flat[..., sel], pars['resc_coef_flat'][sel])
 
 
 def unscale(field, lat):
@@ -91,7 +133,9 @@ def obs_contrast_trend_map(var, year_suffix):
     truth, lat = load_truth(var, obs, os.path.join(artifact_root, f'means{year_suffix}'), return_lats=True)
     lon = truth['lon'].values
     years, X = by_month(unscale(truth.values, lat), coord_to_dtindex(truth.time))
-    return lat, lon, ols_trend(years, contrast(X))[0]
+    C = contrast(X)
+    trend = ols_trend(years, C)[0]
+    return lat, lon, trend, permutation_significance(years, C, trend)
 
 
 def modes34(var, region, method, dmd, pars, time_index):
@@ -106,11 +150,10 @@ def modes34(var, region, method, dmd, pars, time_index):
     ts = rotated['internal_time_series'][:, mode_ks]
     # The sum over the pair is real and does not depend on its PCA rotation.
     recon = ts @ patterns.T
-    series = regional_mean_flat(recon, pars['resc_coef_flat'], lat_flat_from_pars(pars), *regions[region])
+    series = box_mean_flat(recon, pars, boxes[region])
 
     years, TS = by_month(ts, time_index)
-    b = ols_trend(years, contrast(TS))[0]
-    map_flat = patterns @ b
+    map_flat = patterns @ ols_trend(years, contrast(TS))[0]
     idx = np.linspace(0, recon.shape[1] - 1, 7).astype(int)
     slow = ols_trend(years, contrast(by_month(recon[:, idx], time_index)[1]))[0]
     assert np.allclose(slow, map_flat[idx], rtol=1e-6, atol=1e-10 * np.abs(map_flat).max()), (slow, map_flat[idx])
@@ -128,8 +171,9 @@ def seasonal_deviation(X):
 
 def draw_deviation(ax, years, dev):
     smoothed = {season: smooth(x) for season, x in dev.items()}
-    for season, x in smoothed.items():
-        ax.plot(years, x, color=season_hues[season], linewidth=2.0)
+    for season in dev:
+        ax.plot(years, dev[season], color=season_hues[season], linewidth=0.6, alpha=0.3, zorder=1)
+        ax.plot(years, smoothed[season], color=season_hues[season], linewidth=2.0, zorder=3)
     ax.axhline(0, color='0.5', linewidth=0.6)
     ax.set_xlim(years[0], years[-1])
     ax.grid(True, alpha=0.3)
@@ -155,18 +199,26 @@ def pattern_corr(a, b, lat):
     return np.sum(w * a * b) / np.sqrt(np.sum(w * a * a) * np.sum(w * b * b))
 
 
-def draw_map(ax, lat, lon, field, levels, region):
+def draw_map(ax, lat, lon, field, levels, region, stipple=None):
     field_c, lon_c = add_cyclic_point(field, coord=lon)
     m = ax.contourf(lon_c, lat, field_c, levels=levels, cmap=map_cmap, extend='both', transform=ccrs.PlateCarree())
+    if stipple is not None:
+        stipple_c, _ = add_cyclic_point(stipple.astype(float), coord=lon)
+        ax.contourf(lon_c, lat, stipple_c, levels=[0.5, 1.5], colors='none', hatches=['..'],
+                    transform=ccrs.PlateCarree())
     ax.coastlines(linewidth=0.5)
-    edge = regions[region][0] if region == 'n65' else regions[region][1]
-    ax.plot(np.linspace(-180, 180, 361), np.full(361, edge), color='black', linestyle='--', linewidth=1.0,
-            transform=ccrs.PlateCarree())
+    lat0, lat1, lon0, lon1 = boxes[region]
+    if lon1 - lon0 >= 360:
+        lons, lats = np.linspace(-180, 180, 361), np.full(361, lat0 if lat1 == 90 else lat1)
+    else:
+        lons, lats = [lon0, lon1, lon1, lon0, lon0], [lat0, lat0, lat1, lat1, lat0]
+    ax.plot(lons, lats, color='black', linestyle='--', linewidth=1.0, transform=ccrs.PlateCarree())
     ax.set_global()
     return m
 
 
 def plot_drift(year_suffix, run_suffix):
+    plt.rcParams['hatch.linewidth'] = 0.3
     fig = plt.figure(figsize=(12, 13.5), layout='constrained')
     gs = fig.add_gridspec(4, 2, height_ratios=[1, 1.2, 1, 1.2])
     summary = []
@@ -183,13 +235,17 @@ def plot_drift(year_suffix, run_suffix):
         dev_obs, dev_mod = seasonal_deviation(by['raw'][1]), seasonal_deviation(by['modes34'][1])
         sm_obs = draw_deviation(ax_obs, by['raw'][0], dev_obs)
         sm_mod = draw_deviation(ax_mod, by['modes34'][0], dev_mod)
+        yearly = np.abs(np.ravel(list(dev_obs.values())))
+        smoothed = np.abs(np.concatenate([np.ravel(list(d.values())) for d in (sm_obs, sm_mod)]))
+        lim = max(np.percentile(yearly, 98), 1.1 * smoothed.max())
+        ax_obs.set_ylim(-lim, lim)
         r_smooth = {s: np.corrcoef(sm_obs[s], sm_mod[s])[0, 1] for s in season_months}
         r_yearly = {s: np.corrcoef(dev_obs[s], dev_mod[s])[0, 1] for s in season_months}
         annotate_r(ax_mod, r_smooth)
-        ax_obs.set_ylabel(f'{label}\ndeviation from annual mean ({units[var]})\nGaussian smoothing, σ = {smooth_sigma_years} yr',
+        ax_obs.set_ylabel(f'{label}\ndeviation from annual mean ({units[var]})\nthick: Gaussian σ = {smooth_sigma_years} yr, thin: yearly',
                           fontsize=10)
 
-        lat_o, lon_o, map_obs = obs_contrast_trend_map(var, year_suffix)
+        lat_o, lon_o, map_obs, stip_obs = obs_contrast_trend_map(var, year_suffix)
         assert np.allclose(lat_o, lat_m) and np.allclose(lon_o, lon_m), f'{var}: means and EOF grids differ'
         scale = max(np.nanpercentile(np.abs(np.concatenate([map_obs.ravel(), map_modes.ravel()])), 95), 1e-12)
         step = scale / 5
@@ -198,7 +254,7 @@ def plot_drift(year_suffix, run_suffix):
         levels = step * np.arange(-5, 6)
         proj = ccrs.PlateCarree(central_longitude=180)
         map_axes = [fig.add_subplot(gs[2 * i + 1, j], projection=proj) for j in range(2)]
-        m = draw_map(map_axes[0], lat_o, lon_o, map_obs, levels, region)
+        m = draw_map(map_axes[0], lat_o, lon_o, map_obs, levels, region, stip_obs)
         draw_map(map_axes[1], lat_m, lon_m, map_modes, levels, region)
         r_pattern = pattern_corr(map_obs, map_modes, lat_o)
         map_axes[1].text(0.02, 0.04, f'pattern r = {r_pattern:.2f}', transform=map_axes[1].transAxes, fontsize=9,
@@ -208,7 +264,8 @@ def plot_drift(year_suffix, run_suffix):
         cbar = fig.colorbar(m, ax=map_axes, orientation='horizontal', fraction=0.06, aspect=50,
                             format='%g')
         cbar.set_label(f'{var_names[var]} DJF − JJA trend, {by["raw"][0][0]}–{by["raw"][0][-1]} '
-                       f'({units[var]}/century)', fontsize=9)
+                       f'({units[var]}/century); stippling: |{obs} trend| exceeds 95% of {n_perm} year-permuted trends',
+                       fontsize=9)
         if i == 0:
             ax_obs.set_title(obs, fontsize=12)
             ax_mod.set_title('PullbackDMDc internal, modes 3–4', fontsize=12)
@@ -219,6 +276,12 @@ def plot_drift(year_suffix, run_suffix):
         row = {'index': label, 'method': method, 'trend_profile_corr': np.corrcoef(a, b)[0, 1],
                'trend_profile_regression_slope': (a @ b) / (a @ a), 'forced_trend_spread': np.ptp(trends['forced']),
                'pattern_r': r_pattern}
+        w = np.cos(np.deg2rad(lat_o))[:, None] * np.ones_like(map_obs)
+        row['stippled_area'] = np.sum(w * stip_obs) / np.sum(w)
+        row['box_mean_trend'], row['box_frac_significant_same_sign'] = box_stats(lat_o, lon_o, map_obs, stip_obs,
+                                                                                 boxes[region])
+        print(f'{label} box {boxes[region]}: mean trend {row["box_mean_trend"]:.3g} {units[var]}/century, '
+              f'{row["box_frac_significant_same_sign"]:.0%} of cells significant with the same sign', flush=True)
         row.update({f'r_{s}_smoothed': r_smooth[s] for s in season_months})
         row.update({f'r_{s}_yearly': r_yearly[s] for s in season_months})
         summary.append(row)

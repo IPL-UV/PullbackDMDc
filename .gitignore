@@ -2,5 +2,7 @@
 __pycache__/
 *.py[cod]
 
-# Side studies (e.g. reviewer parameter sweeps); outputs live on /data
+# Side studies
 scratch/
+# Sanity checks
+tests/ 
