@@ -1,9 +1,6 @@
-"""The drifting seasonal cycle in 20CRv3 is carried by PullbackDMDc internal variability (annual-period modes 3-4).
+"""Seasonal-cycle change in 20CRv3 and in the internal part of PullbackDMDc modes 3-4 (annual-period pair).
 
-Columns: 20CRv3 | internal part of PullbackDMDc modes 3-4 (one complex-conjugate pair, summed so the result is real
-and independent of the pair's PCA rotation). Rows: SAT N of 65°N index, SAT DJF-JJA trend map, SLP S of 65°S index,
-SLP DJF-JJA trend map. Index rows show each season minus the annual mean (seasonal-cycle deviation only).
-Anomalies are relative to the fixed 1850-2014 monthly climatology, so diverging seasons are a seasonal-cycle change.
+The forced estimate has no seasonal cycle, so seasonal-cycle changes end up in the internal component.
 Run: PBDMDC_LAGS=3 PBDMDC_YEAR_RANGES=1850-2014 python -m evaluation.plot_seasonal_cycle_shift
 """
 import os
@@ -25,22 +22,19 @@ from utils.data_utils import load_truth, undo_lat_scaling
 from utils.params import (artifact_root, pdf_root, predictions_dir, regions, requested_lags,
                           requested_year_ranges, results_dir, run_suffixes)
 
-# (row label from load_rows, var, region, method as in plot_modes.py: 3d for tas, 2d for psl)
 panels = [('SAT N of 65°N', 'tas', 'n65', 'PullbackDMDc-3d'),
           ('SLP S of 65°S', 'psl', 's65', 'PullbackDMDc-2d')]
 var_names = {'tas': 'SAT', 'psl': 'SLP'}
-mode_ks = [2, 3]  # modes 3 and 4: the annual-period complex-conjugate pair
-smooth_sigma_years = 8  # = internal_smooth_sigma (12 * 8 months) in plot_modes.py
+mode_ks = [2, 3]  # modes 3 and 4
+smooth_sigma_years = 8  # as internal_smooth_sigma in plot_modes.py
 per_century = 100.0
 map_cmap = 'RdBu_r'
 
-# One hue per season (Okabe-Ito). DJF uses Jan, Feb and Dec of the same calendar year.
 season_hues = {'DJF': '#0072B2', 'MAM': '#009E73', 'JJA': '#D55E00', 'SON': '#CC79A7'}
 season_months = {'DJF': [11, 0, 1], 'MAM': [2, 3, 4], 'JJA': [5, 6, 7], 'SON': [8, 9, 10]}
 
 
 def by_month(x, time_index):
-    """(years, X) with X[i, m, ...] the value in year i, calendar month m."""
     x = np.ma.getdata(x).astype(float)
     time_index = pd.DatetimeIndex(time_index)
     assert time_index[0].month == 1 and len(x) % 12 == 0, 'series must start in January and cover full years'
@@ -48,17 +42,14 @@ def by_month(x, time_index):
 
 
 def smooth(x):
-    """Gaussian smoothing of a yearly series, as for the mode time series in plot_modes.py."""
     return gaussian_filter1d(x, sigma=smooth_sigma_years)
 
 
 def contrast(X):
-    """DJF minus JJA per year; X has calendar months on axis 1."""
     return X[:, season_months['DJF']].mean(axis=1) - X[:, season_months['JJA']].mean(axis=1)
 
 
 def ols_trend(years, Y):
-    """OLS slope along axis 0 (per century) and its standard error; Y may have trailing (space) dims."""
     t = years - years.mean()
     Yc = Y - Y.mean(axis=0)
     slope = np.tensordot(t, Yc, axes=(0, 0)) / (t @ t)
@@ -77,14 +68,12 @@ def components(entry, method):
 
 
 def unscale(field, lat):
-    """Undo the sqrt(cos lat) storage scaling on (..., lat, lon); NaN where cos lat ~ 0."""
     coef = np.sqrt(np.cos(np.deg2rad(lat)))
     coef = np.where(coef > 1e-3, coef, np.nan)
     return field / coef[:, None]
 
 
 def obs_contrast_trend_map(var, year_suffix):
-    """20CRv3 DJF-JJA trend per grid cell."""
     truth, lat = load_truth(var, obs, os.path.join(artifact_root, f'means{year_suffix}'), return_lats=True)
     lon = truth['lon'].values
     years, X = by_month(unscale(truth.values, lat), coord_to_dtindex(truth.time))
@@ -92,12 +81,6 @@ def obs_contrast_trend_map(var, year_suffix):
 
 
 def modes34(var, region, method, time_index, year_suffix, run_suffix):
-    """Internal part of the modes 3-4 pair of the 20CRv3 fit: (regional index series, lat, lon, DJF-JJA trend map).
-
-    The pair's real contribution recon = sum_k internal_ts_k * pattern_k does not depend on the PCA rotation of the
-    pair, so both the index and the map use the sum. Its DJF-JJA trend is linear in recon, so the map is
-    patterns @ (trend of each part's DJF-JJA contrast).
-    """
     model_dir = os.path.join(predictions_dir(year_suffix, run_suffix), var, obs)
     files = [f for f in os.listdir(model_dir) if f.split('_')[-1].split('.')[0] == method]
     assert len(files) == 1, f'{model_dir}: expected one {method} file, got {files}'
@@ -116,14 +99,13 @@ def modes34(var, region, method, time_index, year_suffix, run_suffix):
 
     patterns = rotated['spatial_patterns'][:, mode_ks]
     ts = rotated['internal_time_series'][:, mode_ks]
-    # Same sqrt(cos lat)-scaled space as the data: _pcs @ eofs = sum_k pattern_k * ts_k (checked in plot_modes).
+    # The sum over the pair is real and does not depend on its PCA rotation.
     recon = ts @ patterns.T
     series = regional_mean_flat(recon, pars['resc_coef_flat'], lat_flat_from_pars(pars), *regions[region])
 
     years, TS = by_month(ts, time_index)
     b = ols_trend(years, contrast(TS))[0]
     map_flat = patterns @ b
-    # Check against the slow way (field -> contrast -> trend) at a few grid cells.
     idx = np.linspace(0, recon.shape[1] - 1, 7).astype(int)
     slow = ols_trend(years, contrast(by_month(recon[:, idx], time_index)[1]))[0]
     assert np.allclose(slow, map_flat[idx], rtol=1e-6, atol=1e-10 * np.abs(map_flat).max()), (slow, map_flat[idx])
@@ -135,7 +117,6 @@ def modes34(var, region, method, time_index, year_suffix, run_suffix):
 
 
 def seasonal_deviation(X):
-    """Per-season anomaly minus the annual mean, per year: only the change of the seasonal cycle remains."""
     dev = X - X.mean(axis=1, keepdims=True)
     return {season: dev[:, months].mean(axis=1) for season, months in season_months.items()}
 
@@ -152,7 +133,6 @@ def draw_deviation(ax, years, dev):
 
 
 def annotate_r(ax, r):
-    """'r  DJF 0.93  MAM ...' in season colours, top left."""
     parts = [TextArea('r', textprops=dict(fontsize=9))]
     parts += [TextArea(f'{s} {v:.2f}', textprops=dict(color=season_hues[s], fontsize=9, fontweight='bold'))
               for s, v in r.items()]
@@ -163,7 +143,6 @@ def annotate_r(ax, r):
 
 
 def pattern_corr(a, b, lat):
-    """cos(lat)-weighted pattern correlation over cells valid in both maps."""
     w = np.broadcast_to(np.cos(np.deg2rad(lat))[:, None], a.shape)
     ok = np.isfinite(a) & np.isfinite(b)
     a, b, w = a[ok], b[ok], w[ok]
@@ -193,7 +172,6 @@ def plot_drift(rows, year_suffix, run_suffix):
         comps['modes34'] = series
         by = {key: by_month(x, time_index) for key, x in comps.items()}
 
-        # Index row: seasonal-cycle deviation, 20CRv3 | modes 3-4.
         ax_obs = fig.add_subplot(gs[2 * i, 0])
         ax_mod = fig.add_subplot(gs[2 * i, 1], sharex=ax_obs, sharey=ax_obs)
         dev_obs, dev_mod = seasonal_deviation(by['raw'][1]), seasonal_deviation(by['modes34'][1])
@@ -202,13 +180,12 @@ def plot_drift(rows, year_suffix, run_suffix):
         r_smooth = {s: np.corrcoef(sm_obs[s], sm_mod[s])[0, 1] for s in season_months}
         r_yearly = {s: np.corrcoef(dev_obs[s], dev_mod[s])[0, 1] for s in season_months}
         annotate_r(ax_mod, r_smooth)
-        ax_obs.set_ylabel(f'{label}\ndeviation from annual mean ({units[var]})', fontsize=10)
+        ax_obs.set_ylabel(f'{label}\ndeviation from annual mean ({units[var]})\nGaussian smoothing, σ = {smooth_sigma_years} yr',
+                          fontsize=10)
 
-        # Map row: DJF-JJA trend, shared colour scale.
         lat_o, lon_o, map_obs = obs_contrast_trend_map(var, year_suffix)
         assert np.allclose(lat_o, lat_m) and np.allclose(lon_o, lon_m), f'{var}: means and EOF grids differ'
         scale = max(np.nanpercentile(np.abs(np.concatenate([map_obs.ravel(), map_modes.ravel()])), 95), 1e-12)
-        # Round the level step up to 1, 2 or 5 x 10^n so the colorbar ticks are round numbers.
         step = scale / 5
         mag = 10 ** np.floor(np.log10(step))
         step = mag * min(s for s in (1, 2, 5, 10) if s * mag >= step)
@@ -230,7 +207,6 @@ def plot_drift(rows, year_suffix, run_suffix):
             ax_obs.set_title(obs, fontsize=12)
             ax_mod.set_title('PullbackDMDc internal, modes 3–4', fontsize=12)
 
-        # Kept for the response letter: across-month trend profiles of internal vs modes 3-4.
         trends = {key: ols_trend(*by[key])[0] for key in ['forced', 'internal', 'modes34']}
         a = trends['internal'] - trends['internal'].mean()
         b = trends['modes34'] - trends['modes34'].mean()
@@ -246,7 +222,7 @@ def plot_drift(rows, year_suffix, run_suffix):
 
     handles = [mlines.Line2D([], [], color=c, linewidth=2.0, label=s) for s, c in season_hues.items()]
     fig.legend(handles=handles, loc='upper center', ncol=4, fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.0),
-               title=f'Season, Gaussian smoothing (σ = {smooth_sigma_years} yr)', title_fontsize=9)
+               title='Season', title_fontsize=9)
     return fig, pd.DataFrame(summary)
 
 
