@@ -167,6 +167,15 @@ def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
     ts_iv = rotated['internal_time_series']
     ts_fr = rotated['forced_time_series']
     labels = rotated['labels']
+
+    # R2-L432: variance of the modes 1-2 forced reconstruction relative to the full forced response
+    # (sqrt(cos lat)-weighted, time mean removed). Modes are not orthogonal, so the ratio is not bounded by 1.
+    forced = np.real(dmd.fr_pcs) @ dmd.eofs
+    forced_12 = ts_fr[:, :2] @ modes[:, :2].T
+    forced_var_ratio_12 = (np.sum((forced_12 - forced_12.mean(axis=0)) ** 2)
+                           / np.sum((forced - forced.mean(axis=0)) ** 2))
+    # Variance of each orange (forced) curve as plotted: forced share of that mode's own time series.
+    forced_fraction = np.var(ts_fr, axis=0) / np.var(ts_fr + ts_iv, axis=0)
     nrows = min(top_n, eigvals.size)
 
     decay_times = compute_yearly_decay_time(eigvals, dmd.lag)
@@ -238,7 +247,8 @@ def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
 
     return {'lat': lat, 'lon': lon, 'nan_mask': nan_mask, 'nrows': nrows,
             'modes_data': modes_data, 'ts_data': ts_data, 'acf_data': acf_data,
-            'row_labels': row_labels, 'mode_labels': mode_labels}
+            'row_labels': row_labels, 'mode_labels': mode_labels, 'forced_var_ratio_12': forced_var_ratio_12,
+            'forced_fraction': forced_fraction[:nrows]}
 
 
 def plot_mode_figure(clim_var, chosen_model, d, row_scales):
@@ -562,6 +572,18 @@ for clim_var in clim_vars:
                       f'p95 |pattern| is {ratio:.2f} of the shared scale', flush=True)
     out_csv = os.path.join(results_dir, f'mode_pattern_amplitude_{clim_var}.csv')
     pd.DataFrame(amplitude_rows, columns=['dataset', 'row', 'label', 'p95_abs', 'ratio_to_shared']).to_csv(out_csv, index=False)
+    print(f'Saved: {out_csv}', flush=True)
+
+    # R2-L432: forced-variance ratio of modes 1-2 for the member shown in each figure.
+    # Plus the forced fraction of each plotted mode's time series (variance of the orange curves).
+    ratio_rows = [{'dataset': m, 'member': dict(esm_list)[m], 'forced_var_ratio_12': d['forced_var_ratio_12'],
+                   **{f'forced_fraction_mode{k + 1}': f for k, f in enumerate(d['forced_fraction'])}}
+                  for m, d in datasets.items()]
+    for row, d in zip(ratio_rows, datasets.values()):
+        print(f'{clim_var} {row["dataset"]}: var(modes 1-2 forced) / var(forced) = {row["forced_var_ratio_12"]:.3f}; '
+              f'forced fraction per mode = {np.round(d["forced_fraction"], 3)}', flush=True)
+    out_csv = os.path.join(results_dir, f'forced_variance_ratio_{clim_var}.csv')
+    pd.DataFrame(ratio_rows).to_csv(out_csv, index=False)
     print(f'Saved: {out_csv}', flush=True)
 
     # Pass 2: plot each dataset.
