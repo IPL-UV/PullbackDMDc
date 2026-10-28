@@ -2,7 +2,7 @@
 
     python plot_ablation_run_results.py                                   # dip depths 0.2 and 0.5, metric corr
 
-The runs are named by their dip depth; the first is the reference, drawn solid with its interquartile band, and the later
+The runs are named by their dip depth; the first is the reference, drawn solid with its 5th to 95th percentile band, and the later
 run is drawn as dotted medians over it. --metric is the forced-response score of the top row of the sweeps and of the
 phase diagrams: corr (default), rel_rmse or r2 (METRICS).
 
@@ -94,13 +94,13 @@ def default_level(study, cfg):
 
 
 def draw_run(ax, run, df, column, methods, truth, linestyle, lw, ms):
-    """One run in one panel. linestyle None draws the reference: solid medians over their interquartile bands; a linestyle
+    """One run in one panel. linestyle None draws the reference: solid medians over their 5th to 95th percentile bands; a linestyle
     draws a later run in it, wider medians with open circles. Returns the line of the true value (results column `truth`)."""
     for method in sorted((m for m in methods if m in run.methods), key=lambda m: m == "PullbackDMDc"):  # PullbackDMDc on top
         grouped = df[df.method == method].groupby("param_value")[column]
         median = grouped.median()
         if linestyle is None:
-            ax.fill_between(median.index, grouped.quantile(0.25), grouped.quantile(0.75), color=colors[method], alpha=0.2, linewidth=0)
+            ax.fill_between(median.index, grouped.quantile(0.16), grouped.quantile(0.84), color=colors[method], alpha=0.2, linewidth=0)
             ax.plot(median.index, median, color=colors[method], marker=method_markers[method], markersize=ms, linewidth=lw)
         else:
             ax.plot(median.index, median, color=colors[method], linestyle=linestyle, linewidth=lw + 0.5, marker="o",

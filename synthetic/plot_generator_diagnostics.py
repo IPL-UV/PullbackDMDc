@@ -11,7 +11,8 @@ them and only draws. Delete the file to regenerate it.
     setup.pdf             (a) the slow and fast patterns with the uniform forcing pattern, (b) the forcing for each dip depth
     pullback_results.pdf  (a) true and estimated forced responses and slow internal variability, as standardized means over the
                           latitudes, (b) forced-response correlation of the fitted realizations (the metric of the ablations),
-                          (c) estimated and true decay times, (d) estimated and true slow-mode pattern (largest real eigenvalue)
+                          (c) decay times, the median and 5 to 95% range of the estimates and the true ones, (d) estimated and
+                          true slow-mode pattern (largest real eigenvalue)
 """
 
 import json
@@ -184,10 +185,10 @@ def draw_pullback(data, fig_dir, n_shown=N_SHOWN):
     ax2.text(0.0, 1.25, "(b)", transform=ax2.transAxes, fontsize=14, fontweight="bold")
 
     modes = np.arange(1, M + 1)
-    for m in range(n_members):
-        ax3.plot(modes, T_est[m], "o", color=ESTIMATE_COLOR, ms=3, alpha=0.5, label="estimated" if m == 0 else None)
-    ax3.plot(modes, np.nanmedian(T_est, axis=0), "o", color=MEDIAN_COLOR, ms=5, label="median")
-    ax3.plot(modes, T_true, "D", color=TRUE_COLOR, mfc="none", ms=7, label="true")
+    q16, median, q84 = np.nanpercentile(T_est, [16, 50, 84], axis=0)    # over the realizations, as the bands of the ablation sweeps
+    ax3.vlines(modes, q16, q84, color=ESTIMATE_COLOR, lw=6, alpha=0.6, label="68% range")
+    ax3.plot(modes, median, "o", color=MEDIAN_COLOR, ms=3, label="median")
+    ax3.plot(modes, T_true, "D", color=TRUE_COLOR, mfc="none", ms=5, label="true")
     ax3.set_yscale("log")
     ax3.set_xticks(modes[::2])
     ax3.set_xlabel("Mode (sorted by |eigenvalue|)")
