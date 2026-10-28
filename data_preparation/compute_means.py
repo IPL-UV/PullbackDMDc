@@ -4,7 +4,7 @@ import os
 import glob
 from utils.data_utils import load_data
 import numpy as np
-from utils.params import artifact_root
+from utils.params import artifact_root, base_path, requested_clim_vars, requested_year_ranges
 
 
 def compute_mean(clim_var, model, base_path="/data/databases/dmdc-variants/mmlea_v2/",start_year=1850, end_year=2014):
@@ -59,15 +59,17 @@ def compute_mean(clim_var, model, base_path="/data/databases/dmdc-variants/mmlea
 if __name__ == '__main__':
 
     # ---- SETTINGS ----
-    clim_vars = ['tas_ocean','psl', 'tas'] #                              
+    clim_vars = requested_clim_vars(['tas_ocean','psl', 'tas']) #                              
     models = ['20CRv3', 'CESM2', 'CanESM5', 'MIROC6', 'MPI-ESM1-2-LR'] #"CESM2"#"MIROC6"#"MPI-ESM" #    
-    base_path = "/data/databases/dmdc-variants/mmlea_v2/"             
-    output_base_path = artifact_root
+    output_base_path = os.getenv("PBDMDC_MEANS_OUT", artifact_root)
+    year_ranges = requested_year_ranges([(1850, 2014), (1950, 2014)])
 
     for clim_var in clim_vars:
         for model in models:
             for start_year, end_year, output_subdir in [(1850, 2014,f"means/{clim_var}/{model}"),
                                                         (1950, 2014,f"means_tier1/{clim_var}/{model}")]:
+                if (start_year, end_year) not in year_ranges:
+                    continue
                 output_dir = os.path.join(output_base_path, output_subdir)               
 
                 if model == 'CESM2':

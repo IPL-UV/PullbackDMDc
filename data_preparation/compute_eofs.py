@@ -4,7 +4,7 @@ from utils.data_utils import load_data
 import pickle as pkl
 import time
 from eofs.standard import Eof
-from utils.params import artifact_root
+from utils.params import artifact_root, base_path, requested_clim_vars, requested_year_ranges
 
 def run_eofs(data: np.array, truncation: int=20):
     data_mean = data.mean(axis = 0)
@@ -22,13 +22,12 @@ if __name__ == '__main__':
     start = time.time()
 
     model_names = ['20CRv3', 'CanESM5', 'CESM2', 'MIROC6', 'MPI-ESM1-2-LR'] #, 
-    base_path = "/data/databases/dmdc-variants/mmlea_v2/"
-    output_base_path = artifact_root
-    clim_vars = ['tas_ocean','psl', 'tas']
+    output_base_path = os.getenv("PBDMDC_EOF_OUT", artifact_root)
+    clim_vars = requested_clim_vars(['tas_ocean','psl', 'tas'])
 
-    truncation = 200
+    truncation = int(os.getenv("PBDMDC_EOF_TRUNCATION", "200"))
 
-    for year_range in [(1950,2014),(1850,2014)]:
+    for year_range in requested_year_ranges([(1950,2014),(1850,2014)]):
         start_year, end_year = year_range        
 
         if (start_year, end_year) == (1950, 2014):

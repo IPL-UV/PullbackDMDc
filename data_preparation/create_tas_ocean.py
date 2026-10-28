@@ -3,7 +3,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
-from utils.params import artifact_root
+from utils.params import artifact_root, base_path
 
 
 def infer_output_filename(filename, input_var, output_var):
@@ -108,8 +108,7 @@ def make_plot(da, title, out_file):
 
 if __name__ == '__main__':
 
-    base_path = "/data/databases/dmdc-variants/mmlea_v2"
-    output_base_path = artifact_root
+    output_base_path = os.getenv("PBDMDC_TAS_OCEAN_OUT", artifact_root)
     input_var = "tas"
     output_var = "tas_ocean"
     source_subdir = "tas"
@@ -118,14 +117,14 @@ if __name__ == '__main__':
     tos_mask_filename = "tos_Omon_MPI-ESM1-2-LR_historical_r5i1p1f1_g025_185001-201412.nc"
     tos_mask_var = "tos"
     mask_reference_year = 1850
-    latitude_max = 65.0
-    latitude_min = -40.0
+    latitude_max = float(os.getenv("PBDMDC_LAT_MAX", "65.0"))
+    latitude_min = float(os.getenv("PBDMDC_LAT_MIN", "-40.0"))
     overwrite = False
     seed = 42
 
     source_root = os.path.join(base_path, "ensembles", source_subdir)
     target_root = os.path.join(output_base_path, "ensembles", target_subdir)
-    proof_plot = os.path.join(os.path.dirname(__file__), "tas_ocean_random_member.png")
+    proof_plot = os.getenv("PBDMDC_PROOF_PLOT", os.path.join(os.path.dirname(__file__), "tas_ocean_random_member.png"))
 
     if not os.path.isdir(source_root):
         raise FileNotFoundError(f"Source directory does not exist: {source_root}")
