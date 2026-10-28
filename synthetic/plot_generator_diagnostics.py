@@ -77,7 +77,6 @@ def draw_setup(data, fig_dir):
         ax2.plot(years, y_delta, color="k", ls=ls, lw=1.7, label=rf"$\delta = {delta:g}$")
     ax2.axhline(0, color="0.6", lw=0.8)
     top = ax2.get_xaxis_transform()                          # x in years, y in axes fraction
-    ax2.text((start + 1850) / 2, 0.93, f"spin-up ({spin_up:g} yr)", ha="center", color="0.3", transform=top)
     ax2.text((1850 + years[-1]) / 2, 0.93, "training interval 1850-2014", ha="center", color="0.3", transform=top)
     ax2.set_xlim(start, years[-1])
     shown = years >= start
@@ -180,6 +179,7 @@ def draw_pullback(data, fig_dir, n_shown=N_SHOWN):
     ax2.axvline(np.median(rho), color=MEDIAN_COLOR, ls="--", lw=1.5, label=f"median = {np.median(rho):.3f}")
     ax2.set_xlabel("Forced-response correlation")
     ax2.set_ylabel("Number of realizations")
+    ax2.set_xlim(0.97, 1.005)
     ax2.legend(frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0))
     ax2.text(0.0, 1.25, "(b)", transform=ax2.transAxes, fontsize=14, fontweight="bold")
 
@@ -209,7 +209,7 @@ def draw_pullback(data, fig_dir, n_shown=N_SHOWN):
     for ax in (ax1, ax2, ax3, ax4):
         ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
-    plt.savefig(fig_dir / "pullback_results.pdf", bbox_inches="tight")
+    plt.savefig(fig_dir / "pullback_results.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 

@@ -21,5 +21,4 @@ echo "=== run figures ==="
 python plot_ablation_run_results.py --deltas 0.2 0.5
 
 echo "=== generator diagnostics ==="
-#uncomment to rerun generator diagnostics (1000 realizations, takes time)
-#python plot_generator_diagnostics.py
+python plot_generator_diagnostics.py

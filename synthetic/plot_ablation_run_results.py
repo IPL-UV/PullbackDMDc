@@ -147,7 +147,7 @@ def plot_sweeps(runs, path, metric):
                 if default is not None:
                     ax.axvline(default, color=DEFAULT_LINE_COLOR, linewidth=1.4, zorder=0)
                 if truth_line is not None:                                 # the true tau_1, in a legend inside the panel
-                    ax.legend([truth_line], [r"true $\tau_1$"], loc="upper left", frameon=False)
+                    ax.legend([truth_line], [r"true $\tau_1$"], loc="upper right", frameon=False)
             axes[0, j].set_title(STUDIES[study].title)
             axes[-1, j].set_xlabel(next(f.param_name.iloc[0] for f in frames.values() if not f.empty))
         for (label, _, _, ylim, _, _), row in zip(rows, axes):
