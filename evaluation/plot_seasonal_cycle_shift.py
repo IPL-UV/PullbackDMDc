@@ -16,12 +16,12 @@ from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
 from scipy.ndimage import gaussian_filter1d
 
 from evaluation.plot_gm_timeseries import units
-from evaluation.plot_obs_forced_timeseries import load_rows, obs
-from evaluation.utils.metrics import coord_to_dtindex, lat_flat_from_pars, regional_mean_flat
+from evaluation.utils.metrics import coord_to_dtindex, lat_flat_from_pars, regional_mean, regional_mean_flat
 from utils.data_utils import load_truth, undo_lat_scaling
 from utils.params import (artifact_root, pdf_root, predictions_dir, regions, requested_lags,
-                          requested_year_ranges, results_dir, run_suffixes)
+                          requested_year_ranges, run_suffixes)
 
+obs = '20CRv3'
 panels = [('SAT N of 65°N', 'tas', 'n65', 'PullbackDMDc-3d'),
           ('SLP S of 65°S', 'psl', 's65', 'PullbackDMDc-2d')]
 var_names = {'tas': 'SAT', 'psl': 'SLP'}
@@ -58,13 +58,27 @@ def ols_trend(years, Y):
     return slope * per_century, se * per_century
 
 
-def components(entry, method):
-    first = entry[method]
-    assert first['truth_is_raw'], 'expected the raw reanalysis as truth'
-    assert len(first['preds']) == 1, f'expected one {obs} realization'
-    raw = np.ma.getdata(first['truth']).astype(float)
-    forced = np.asarray(first['preds'][0], dtype=float)
-    return first['time'], {'raw': raw, 'forced': forced, 'internal': raw - forced}
+def load_fit(var, method, year_suffix, run_suffix):
+    model_dir = os.path.join(predictions_dir(year_suffix, run_suffix), var, obs)
+    files = [f for f in os.listdir(model_dir) if f.split('_')[-1].split('.')[0] == method]
+    assert len(files) == 1, f'{model_dir}: expected one {method} file, got {files}'
+    with open(os.path.join(model_dir, files[0]), 'rb') as f:
+        dmd = pkl.load(f)
+    eof_file = os.path.join(artifact_root, f'eofs{year_suffix}', var, obs, files[0].replace('_' + method, ''))
+    with open(eof_file, 'rb') as f:
+        pars = pkl.load(f)['data_pars']
+    return dmd, pars
+
+
+def components(var, region, dmd, pars, year_suffix):
+    """Regional mean of the raw reanalysis and of the forced estimate, as in compute_gm_timeseries."""
+    truth, lat = load_truth(var, obs, os.path.join(artifact_root, f'means{year_suffix}'), return_lats=True)
+    raw = np.ma.getdata(regional_mean(truth, lat, *regions[region])).astype(float)
+    # Same reconstruction as load_truncated_prediction.
+    svals = np.sqrt((dmd.eofs ** 2).sum(axis=-1))
+    recon = (dmd.fr_pcs.real * svals) @ (dmd.eofs / svals[:, None])
+    forced = regional_mean_flat(recon, pars['resc_coef_flat'], lat_flat_from_pars(pars), *regions[region])
+    return coord_to_dtindex(truth.time), {'raw': raw, 'forced': forced, 'internal': raw - forced}
 
 
 def unscale(field, lat):
@@ -80,16 +94,7 @@ def obs_contrast_trend_map(var, year_suffix):
     return lat, lon, ols_trend(years, contrast(X))[0]
 
 
-def modes34(var, region, method, time_index, year_suffix, run_suffix):
-    model_dir = os.path.join(predictions_dir(year_suffix, run_suffix), var, obs)
-    files = [f for f in os.listdir(model_dir) if f.split('_')[-1].split('.')[0] == method]
-    assert len(files) == 1, f'{model_dir}: expected one {method} file, got {files}'
-    with open(os.path.join(model_dir, files[0]), 'rb') as f:
-        dmd = pkl.load(f)
-    eof_file = os.path.join(artifact_root, f'eofs{year_suffix}', var, obs, files[0].replace('_' + method, ''))
-    with open(eof_file, 'rb') as f:
-        pars = pkl.load(f)['data_pars']
-
+def modes34(var, region, method, dmd, pars, time_index):
     dmd.compute_modes()
     rotated = dmd.compute_rotated_modes(top_n=max(mode_ks) + 1)
     labels = [rotated['labels'][k] for k in mode_ks]
@@ -161,13 +166,14 @@ def draw_map(ax, lat, lon, field, levels, region):
     return m
 
 
-def plot_drift(rows, year_suffix, run_suffix):
+def plot_drift(year_suffix, run_suffix):
     fig = plt.figure(figsize=(12, 13.5), layout='constrained')
     gs = fig.add_gridspec(4, 2, height_ratios=[1, 1.2, 1, 1.2])
     summary = []
     for i, (label, var, region, method) in enumerate(panels):
-        time_index, comps = components(rows[label], method)
-        series, lat_m, lon_m, map_modes = modes34(var, region, method, time_index, year_suffix, run_suffix)
+        dmd, pars = load_fit(var, method, year_suffix, run_suffix)
+        time_index, comps = components(var, region, dmd, pars, year_suffix)
+        series, lat_m, lon_m, map_modes = modes34(var, region, method, dmd, pars, time_index)
         assert series.shape == comps['raw'].shape
         comps['modes34'] = series
         by = {key: by_month(x, time_index) for key, x in comps.items()}
@@ -233,8 +239,7 @@ if __name__ == '__main__':
             out_dir = os.path.join(pdf_root, f'results{year_suffix}{run_suffix}')
             os.makedirs(out_dir, exist_ok=True)
 
-            rows = {label: entry for _, label, entry in load_rows(results_dir(year_suffix, run_suffix), ['tas', 'psl'])}
-            fig, summary = plot_drift(rows, year_suffix, run_suffix)
+            fig, summary = plot_drift(year_suffix, run_suffix)
             out_fig = os.path.join(out_dir, f'seasonal_cycle_drift_{obs}.pdf')
             fig.savefig(out_fig, dpi=300, bbox_inches='tight')
             plt.close(fig)

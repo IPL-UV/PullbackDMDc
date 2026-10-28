@@ -39,11 +39,6 @@ esm_list = list(SELECTED_MEMBERS.items())
 
 clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
 
-# Map colour scale: 'shared' (one scale for all datasets of a variable), 'per_figure'
-# (one scale per figure) or 'per_row' (one scale and colorbar per map row, legacy).
-cbar_mode = os.getenv('PBDMDC_MODE_CBAR', 'shared')
-if cbar_mode not in ('shared', 'per_figure', 'per_row'):
-    raise ValueError(f'PBDMDC_MODE_CBAR must be shared, per_figure or per_row, got {cbar_mode!r}')
 # Patterns are multiplied by the std of the mode time series, so they are in data units per 1 sigma.
 cbar_labels = {'tas': 'K per 1σ of mode time series',
                'tas_ocean': 'K per 1σ of mode time series',
@@ -186,7 +181,6 @@ def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
     ts_data = []
     acf_data = []
     row_labels = []
-    mode_labels = []
 
     check_sum=0.
     pair_counts = {}
@@ -241,18 +235,17 @@ def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
             f'Freq={frequencies[k]:.3f}/y\n'
             f'{part_label}'
         )
-        mode_labels.append(f'{mode_label} {part_label}'.strip())
 
     print(np.amax(np.abs(dmd._pcs@ dmd.eofs-check_sum)))
 
     return {'lat': lat, 'lon': lon, 'nan_mask': nan_mask, 'nrows': nrows,
             'modes_data': modes_data, 'ts_data': ts_data, 'acf_data': acf_data,
-            'row_labels': row_labels, 'mode_labels': mode_labels, 'forced_var_ratio_12': forced_var_ratio_12,
+            'row_labels': row_labels, 'forced_var_ratio_12': forced_var_ratio_12,
             'forced_fraction': forced_fraction[:nrows]}
 
 
-def plot_mode_figure(clim_var, chosen_model, d, row_scales):
-    """Plot one dataset: rows = modes, cols = [map, time series, ACF]. row_scales[k] sets the map levels of row k."""
+def plot_mode_figure(clim_var, chosen_model, d, scale):
+    """Plot one dataset: rows = modes, cols = [map, time series, ACF]. scale sets the map levels of every row."""
     lat, lon, nan_mask, nrows = d['lat'], d['lon'], d['nan_mask'], d['nrows']
     modes_data, ts_data, acf_data, row_labels = d['modes_data'], d['ts_data'], d['acf_data'], d['row_labels']
 
@@ -265,14 +258,10 @@ def plot_mode_figure(clim_var, chosen_model, d, row_scales):
     col1_width = 2.4 if clim_var == 'tas_ocean' else 1.8
     col_widths = [col1_width, 1.1, 1.0]  # relative widths: map, time series, ACF
 
-    if cbar_mode == 'per_row':
-        row_height = 2.5 if clim_var == 'tas_ocean' else 3.5
-        map_row_hspace = 0.18 if clim_var == 'tas_ocean' else 0.12
-    else:
-        # No colorbars between map rows: shorter rows so the maps (width-limited by their
-        # aspect ratio) sit close together; the time series and ACF panels get shorter.
-        row_height = 1.9 if clim_var == 'tas_ocean' else 2.7
-        map_row_hspace = 0.05 if clim_var == 'tas_ocean' else 0.04
+    # No colorbars between map rows: shorter rows so the maps (width-limited by their
+    # aspect ratio) sit close together; the time series and ACF panels get shorter.
+    row_height = 1.9 if clim_var == 'tas_ocean' else 2.7
+    map_row_hspace = 0.05 if clim_var == 'tas_ocean' else 0.04
     fig = plt.figure(figsize=(sum(col_widths) * 3.4, row_height * nrows))
     gs = gridspec.GridSpec(nrows, ncols, width_ratios=col_widths, figure=fig, hspace=map_row_hspace)
 
@@ -310,24 +299,23 @@ def plot_mode_figure(clim_var, chosen_model, d, row_scales):
         mode_real = modes_data[k]
         time, ts, ts_f = ts_data[k]
         acf_time, ts_acf, acf_lower, acf_upper = acf_data[k]
-        mode_scale_k = row_scales[k]
 
         # --- map ---
         ax_map = fig.add_subplot(gs[k, 0], projection=ccrs.PlateCarree(central_longitude=180))
         m = ax_map.contourf(Lon, Lat, mode_real,
                             transform=ccrs.PlateCarree(),
-                            cmap=map_cmap, levels=np.linspace(-mode_scale_k, mode_scale_k, 11), extend='both')
+                            cmap=map_cmap, levels=np.linspace(-scale, scale, 11), extend='both')
         ax_map.set_extent([-180, 180] + map_lat_extent, crs=ccrs.PlateCarree())
         ax_map.coastlines(linewidth=0.7)
         map_axes.append(ax_map)
         if map_mappable is None:
             map_mappable = m
         # Keep map panel size intact by drawing colorbar in an inset axes.
-        # With a common scale only the bottom map gets one; it applies to every row.
-        if cbar_mode == 'per_row' or k == len(modes_data) - 1:
+        # One scale per figure, so only the bottom map gets one; it applies to every row.
+        if k == len(modes_data) - 1:
             cax_map = ax_map.inset_axes([0.12, -0.12, 0.76, 0.05])
-            # Pa values are large, so whole numbers keep the shared colorbar ticks from overlapping.
-            cbar_format = '%.0f' if cbar_mode != 'per_row' and clim_var == 'psl' else '%.2f'
+            # Pa values are large, so whole numbers keep the colorbar ticks from overlapping.
+            cbar_format = '%.0f' if clim_var == 'psl' else '%.2f'
             cbar_map = fig.colorbar(m, cax=cax_map, orientation='horizontal', format=cbar_format)
             cbar_map.ax.tick_params(labelsize=shared_fontsize)
             cbar_map.set_label(cbar_labels[clim_var], fontsize=shared_fontsize)
@@ -548,7 +536,6 @@ for clim_var in clim_vars:
     else:
         chosen_method = 'PullbackDMDc-3d'
 
-    # Pass 1: modes for every dataset, so the map scale can be shared across figures.
     datasets = {}
     for (chosen_model, chosen_member) in esm_list:
         d = load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method)
@@ -556,23 +543,6 @@ for clim_var in clim_vars:
             datasets[chosen_model] = d
     if not datasets:
         continue
-
-    shared_scale = p95_abs([mode_real for d in datasets.values() for mode_real in d['modes_data']])
-
-    # Amplitude of each map row relative to the shared scale; rows far below it look washed out.
-    amplitude_rows = []
-    for chosen_model, d in datasets.items():
-        for k, mode_real in enumerate(d['modes_data']):
-            row_p95 = p95_abs([mode_real])
-            ratio = row_p95 / shared_scale
-            amplitude_rows.append({'dataset': chosen_model, 'row': k + 1, 'label': d['mode_labels'][k],
-                                   'p95_abs': row_p95, 'ratio_to_shared': ratio})
-            if ratio < 0.25:
-                print(f'WARNING: {clim_var} {chosen_model} row {k + 1} ({d["mode_labels"][k]}): '
-                      f'p95 |pattern| is {ratio:.2f} of the shared scale', flush=True)
-    out_csv = os.path.join(results_dir, f'mode_pattern_amplitude_{clim_var}.csv')
-    pd.DataFrame(amplitude_rows, columns=['dataset', 'row', 'label', 'p95_abs', 'ratio_to_shared']).to_csv(out_csv, index=False)
-    print(f'Saved: {out_csv}', flush=True)
 
     # R2-L432: forced-variance ratio of modes 1-2 for the member shown in each figure.
     # Plus the forced fraction of each plotted mode's time series (variance of the orange curves).
@@ -586,12 +556,5 @@ for clim_var in clim_vars:
     pd.DataFrame(ratio_rows).to_csv(out_csv, index=False)
     print(f'Saved: {out_csv}', flush=True)
 
-    # Pass 2: plot each dataset.
     for chosen_model, d in datasets.items():
-        if cbar_mode == 'shared':
-            row_scales = [shared_scale] * d['nrows']
-        elif cbar_mode == 'per_figure':
-            row_scales = [p95_abs(d['modes_data'])] * d['nrows']
-        else:
-            row_scales = [p95_abs([mode_real]) for mode_real in d['modes_data']]
-        plot_mode_figure(clim_var, chosen_model, d, row_scales)
+        plot_mode_figure(clim_var, chosen_model, d, p95_abs(d['modes_data']))

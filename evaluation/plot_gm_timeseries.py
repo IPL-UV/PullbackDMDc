@@ -14,7 +14,7 @@ from matplotlib.ticker import MaxNLocator
 import pandas as pd
 from utils.params import method_markers
 from utils.params import (pdf_root, requested_lags, requested_year_ranges, requested_clim_vars,
-                          run_suffixes, results_dir, regions)
+                          run_suffixes, results_dir, regions, region_vars)
 esms = esms[1:] # Exclude obs for this figure
 
 ###########################################
@@ -57,6 +57,10 @@ def is_in_volcanic(t):
     return any(t_s <= t < t_e for t_s, t_e in volcanic_intervals)
 
 
+def reference_method(var):
+    return 'PullbackDMDc-2d' if var == 'psl' else 'PullbackDMDc-3d'
+
+
 ci_columns = ['var', 'model', 'period', 'method', 'n_members', 'rmsd_pct', 'ci_lo', 'ci_hi',
               'ref_method', 'diff_vs_ref', 'diff_ci_lo', 'diff_ci_hi', 'ref_significantly_better',
               'member_p2_5', 'member_p97_5']
@@ -65,14 +69,13 @@ ci_columns = ['var', 'model', 'period', 'method', 'n_members', 'rmsd_pct', 'ci_l
 def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, seed):
     """
     Grouped bars of pooled RMSD by period (% of truth std) with member-bootstrap 95% CIs.
-    The same member resampling is used for every method and period (paired bootstrap), so a
-    '*' marks methods whose RMSD is significantly higher than the reference PullbackDMDc.
+    The same member resampling is used for every method and period (paired bootstrap), so the
+    CSV rows flag methods whose RMSD is significantly higher than the reference PullbackDMDc.
     Returns one CSV row (dict) per (period, method); the caller adds 'model'.
     """
     tick_fontsize = 10
-    ref_method = 'PullbackDMDc-2d' if var == 'psl' else 'PullbackDMDc-3d'
+    ref_method = reference_method(var)
     n_boot = int(os.getenv('PBDMDC_N_BOOT', '2000'))
-    sig_markers = os.getenv('PBDMDC_SIG_MARKERS', '1') != '0'
 
     assert not np.ma.is_masked(truth)
     truth = np.ma.getdata(truth)
@@ -134,7 +137,7 @@ def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, se
     ci_top = 0.0
     for mi, method in enumerate(methods):
         x_pos = group_centers + (mi - (n_methods - 1) / 2) * bar_width
-        bar_vals, err_lo, err_hi, stars = [], [], [], []
+        bar_vals, err_lo, err_hi = [], [], []
         for gi in range(n_groups):
             if (method, gi) not in stats:
                 bar_vals.append(0.0)
@@ -155,8 +158,6 @@ def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, se
                 diff_vs_ref = point - stats[ref_method, gi][0]
                 if paired:
                     diff_lo, diff_hi, ref_better = paired_difference(boot, stats[ref_method, gi][1])
-                    if ref_better:
-                        stars.append((x_pos[gi], hi))
 
             member_lo, member_hi = np.percentile(member_rmsd, [2.5, 97.5])
             rows.append({'var': var, 'period': group_labels[gi].replace('\n', ' '), 'method': method,
@@ -176,10 +177,6 @@ def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, se
             zorder=1,
             error_kw=dict(elinewidth=0.6, capsize=1.5, ecolor='black'),
         )
-        if sig_markers:
-            for x_star, y_star in stars:
-                ax_bar.annotate('*', xy=(x_star, y_star), xytext=(0, 0.5), textcoords='offset points',
-                                ha='center', va='bottom', fontsize=8)
 
     if ci_top > 0:
         ax_bar.set_ylim(0, ci_top * 1.12)
@@ -586,7 +583,10 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
         ax_ts.grid(True, alpha=0.3)
         ax_ts.set_axisbelow(True)
 
-        for method in methods_plot_order:
+        # Reference PullbackDMDc drawn last so its envelope sits on top of the others.
+        ref_method = reference_method(var)
+        top_order = [m for m in methods_plot_order if m != ref_method] + [ref_method]
+        for method in top_order:
             color = colors[method]
             preds = np.array(timeseries[model][method]['preds'])
 
@@ -735,11 +735,6 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
         mlines.Line2D([], [], color='black', linestyle='none', marker='|', markersize=10,
                       markeredgewidth=1.0, label='95% CI (member bootstrap)')
     )
-    if os.getenv('PBDMDC_SIG_MARKERS', '1') != '0':
-        legend_handles.append(
-            mlines.Line2D([], [], color='black', linestyle='none', marker='$*$', markersize=8,
-                          label='PullbackDMDc significantly lower RMSD')
-        )
 
     fig.legend(
         handles=legend_handles,
@@ -795,7 +790,9 @@ if __name__ == '__main__':
 
                     save_timeseries_figure(timeseries, var, pdf_results_dir, f'gm_{var}')
 
-                # Regional means (R2-L374), written by compute_gm_timeseries for PBDMDC_REGION_VARS.
+                # Regional means (R2-L374), written by compute_gm_timeseries for params.region_vars.
+                if var not in region_vars:
+                    continue
                 for region in regions:
                     in_path = os.path.join(artifact_results_dir, f'region_timeseries_{var}_{region}.pkl')
                     if not os.path.exists(in_path):
