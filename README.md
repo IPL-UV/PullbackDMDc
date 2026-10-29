@@ -54,7 +54,7 @@ Taylor diagram workflow details are documented in `evaluation/utils/README.md`.
 ## Directory Structure
 
 - `data_preparation/`: preprocessing utilities and EOF generation used by downstream evaluation.
-- `evaluation/`: scripts that compute intermediate metrics and produce paper figure files.
+- `evaluation/`: one `plot_*.py` per figure family plus the `compute_*.py` caches they read (see `evaluation/README.md`).
 - `evaluation_results/`: output directory for generated plots and intermediate files.
 - `utils/`: model implementations and shared data-loading logic.
 - `downloads/`: dataset download and preprocessing helpers.
@@ -101,28 +101,19 @@ python -m data_preparation.create_tas_ocean
 python experiments.py
 ```
 
-3. Compute intermediate metrics used by plotting scripts:
+3. Compute the caches used by the plotting scripts (`slurm/02_compute_metrics.sbatch`):
 ```bash
-python -m evaluation.compute_taylor_vis
-python -m evaluation.compute_trend_taylor_viz
+python -m evaluation.compute_taylor
+python -m evaluation.compute_trend_taylor
+PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.compute_trend_taylor
+PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.compute_trend_maps
 python -m evaluation.compute_gm_timeseries
 python -m evaluation.compute_acfs
 ```
 
-4. Generate paper figures in `evaluation_results/`:
-```bash
-python -m evaluation.plot_taylor_vis
-python -m evaluation.plot_gm_timeseries
-python -m evaluation.plot_modes
-python -m evaluation.eig_vis_circle
-python -m evaluation.plot_decay_frequency
-python -m evaluation.plot_mode_selection
-python -m evaluation.plot_mode_summary_three_rows
-python -m evaluation.plot_psd_mtm
-python -m evaluation.plot_timescale_vs_forced_summary
-python -m evaluation.plot_acf_summary
-python -m evaluation.B_vis_small
-```
+4. Generate paper figures in `evaluation_results/` (`slurm/03_plot_main.sbatch`, `slurm/04_plot_tier1.sbatch`).
+   There is one `evaluation/plot_*.py` per figure family; `evaluation/README.md` maps each script to the caches
+   it reads and the files it writes.
 
 Notes:
 - Main scripts read data/output roots from `PBDMDC_DATA_ROOT`, `PBDMDC_ARTIFACT_ROOT`, and `PBDMDC_PDF_ROOT` (see `utils/params.py` and `slurm/*.sbatch`).

@@ -29,20 +29,20 @@ Because `N_EOF` is typically much smaller than the number of grid cells, this su
 Compute raw Taylor metrics:
 
 ```bash
-python -m evaluation.compute_taylor_vis
+python -m evaluation.compute_taylor
 ```
 
 Compute trend Taylor metrics:
 
 ```bash
-python -m evaluation.compute_trend_taylor_viz
+python -m evaluation.compute_trend_taylor
 ```
 
 Plot Taylor diagrams (set mode with env var):
 
 ```bash
-PBDMDC_TAYLOR_MODE=raw python -m evaluation.plot_taylor_vis
-PBDMDC_TAYLOR_MODE=trend python -m evaluation.plot_taylor_vis
+PBDMDC_TAYLOR_MODE=raw python -m evaluation.plot_taylor
+PBDMDC_TAYLOR_MODE=trend python -m evaluation.plot_taylor
 ```
 
 ## Inputs and Outputs
