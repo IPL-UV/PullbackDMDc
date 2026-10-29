@@ -9,10 +9,10 @@ import pandas as pd
 
 from evaluation.utils.members import (SELECTED_HANDLE, acf_selected_index, mark_selected, method_files,
                                       selected_index)
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS
 from evaluation.utils.timescales import efolding_time, zero_crossing_time, eig_decay_time_years
 from utils.params import artifact_root, esms, pdf_root, predictions_dir, requested_clim_vars
 
-CLIM_VAR_LABELS = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
 
 # (key, legend label, scatter style, vertical offset within a dataset row)
 QUANTITIES = [
@@ -120,7 +120,7 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
                             ha='center', va='bottom', fontsize=9, color=band_cfg['color'],
                             transform=ax.get_xaxis_transform())
 
-        axes[row_idx, 0].set_ylabel(CLIM_VAR_LABELS[clim_var], fontsize=12)
+        axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=12)
 
     for ax in axes[-1, :]:
         ax.set_xlabel('Years', fontsize=12)
@@ -163,18 +163,6 @@ def main():
     os.makedirs(pdf_results_dir, exist_ok=True)
     base_pred_dir = predictions_dir(year_suffix, lag_suffix)
 
-    timescale_bands = {
-        'ENSO': {'xlim': (2.0, 7.0), 'color': 'tab:cyan', 'alpha': 0.12},
-        'PDO': {'xlim': (10.0, 30.0), 'color': 'tab:purple', 'alpha': 0.10},
-    }
-    esm_colors = {
-        '20CRv3': 'black',
-        'CESM2': '#7f7f7f',
-        'MPI-ESM1-2-LR': '#8c564b',
-        'CanESM5': '#2ca02c',
-        'MIROC6': '#0b1f5b',
-    }
-    model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
     obs_model = '20CRv3'
 
     timescales_by_var = {}
@@ -218,8 +206,8 @@ def main():
     print('\nMedian e-folding time / median eigenvalue decay time:')
     print(ratio.to_string())
 
-    fig = plot_timescale_grid(timescales_by_var, available_clim_vars, top_n, timescale_bands,
-                              esm_colors, model_display_names, obs_model)
+    fig = plot_timescale_grid(timescales_by_var, available_clim_vars, top_n, TIMESCALE_BANDS,
+                              ESM_COLORS, MODEL_DISPLAY_NAMES, obs_model)
     out_path = os.path.join(pdf_results_dir, f'acf_efolding_{"_".join(available_clim_vars)}.pdf')
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)

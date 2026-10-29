@@ -9,6 +9,7 @@ from matplotlib.patches import Patch
 from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker
 from utils.data_utils import undo_lat_scaling
 from evaluation.utils.members import SELECTED_MEMBERS
+from evaluation.utils.style import CLIM_VARS_ON_FIG, TIMESCALE_BANDS, display_model_name, p95_abs
 from utils.params import artifact_root, pdf_root, predictions_dir
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.gridspec as gridspec
@@ -37,8 +38,6 @@ chosen_member = ''
 # (dataset, member) shown per figure; members are defined once in evaluation/utils/members.py.
 esm_list = list(SELECTED_MEMBERS.items())
 
-clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
-
 # Patterns are multiplied by the std of the mode time series, so they are in data units per 1 sigma.
 cbar_labels = {'tas': 'K per 1σ of mode time series',
                'tas_ocean': 'K per 1σ of mode time series',
@@ -56,10 +55,6 @@ top_n = 4
 map_cmap = 'RdBu_r'
 shared_fontsize = 12
 internal_smooth_sigma = 12 * 8 # eight years
-timescale_bands = {
-    'ENSO': {'xlim': (2.0, 7.0),   'color': 'tab:cyan',   'alpha': 0.12},
-    'PDO':  {'xlim': (10.0, 30.0), 'color': 'tab:purple', 'alpha': 0.10},
-}
 #acf_length = [100 * 12] * 2 + [20*12] * (top_n-2)
 
 def compute_yearly_decay_time(lambdas, tau):
@@ -107,15 +102,6 @@ def first_zero_crossing_time(acf_time, acf_values):
             weight = np.clip(weight, 0.0, 1.0)
             return float(acf_time[prev_idx] + weight * (acf_time[idx] - acf_time[prev_idx]))
     return np.nan
-
-
-def display_model_name(model_name):
-    return 'MPI-ESM' if model_name == 'MPI-ESM1-2-LR' else model_name
-
-
-def p95_abs(maps):
-    """95th percentile of |map| pooled over a list of maps (NaNs ignored), floored at 1e-12."""
-    return max(np.nanpercentile(np.abs(np.concatenate([m.ravel() for m in maps])), 95), 1e-12)
 
 
 def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
@@ -362,7 +348,7 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
         acf_upper_plot = acf_upper[0:]
 
 
-        for band_name, band_config in timescale_bands.items():
+        for band_name, band_config in TIMESCALE_BANDS.items():
             ax_acf.axvspan(
                 band_config['xlim'][0],
                 band_config['xlim'][1],
@@ -403,20 +389,20 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
         ax_acf.set_ylim(acf_min_k - acf_margin_k, acf_max_k + acf_margin_k)
         if k == 0:
             ax_acf.text(
-                0.5 * (timescale_bands['ENSO']['xlim'][0] + timescale_bands['ENSO']['xlim'][1]),
+                0.5 * (TIMESCALE_BANDS['ENSO']['xlim'][0] + TIMESCALE_BANDS['ENSO']['xlim'][1]),
                 0.92,
                 'ENSO',
-                color=timescale_bands['ENSO']['color'],
+                color=TIMESCALE_BANDS['ENSO']['color'],
                 fontsize=shared_fontsize - 1,
                 ha='center',
                 va='top',
                 transform=ax_acf.get_xaxis_transform(),
             )
             ax_acf.text(
-                0.5 * (timescale_bands['PDO']['xlim'][0] + timescale_bands['PDO']['xlim'][1]),
+                0.5 * (TIMESCALE_BANDS['PDO']['xlim'][0] + TIMESCALE_BANDS['PDO']['xlim'][1]),
                 0.92,
                 'PDO',
-                color=timescale_bands['PDO']['color'],
+                color=TIMESCALE_BANDS['PDO']['color'],
                 fontsize=shared_fontsize - 1,
                 ha='center',
                 va='top',
@@ -485,7 +471,7 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
     title_y = min(0.985, top_y + 0.015)
     suptitle_y = min(0.995, title_y + 0.06)
     fig.suptitle(
-        f'{display_model_name(chosen_model)}, {clim_vars_on_fig[clim_var]}: Top {top_n} dynamic modes',
+        f'{display_model_name(chosen_model)}, {CLIM_VARS_ON_FIG[clim_var]}: Top {top_n} dynamic modes',
         fontsize=17,
         y=suptitle_y,
     )

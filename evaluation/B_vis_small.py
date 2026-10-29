@@ -6,6 +6,7 @@ import cartopy.crs as ccrs
 import xarray as xr
 
 from utils.data_utils import undo_lat_scaling, load_forcings
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
 from utils.params import predictions_dir
 
 
@@ -15,16 +16,7 @@ def mean_pattern(patterns):
     return np.mean(patterns, axis=0)
 
 
-def display_model_name(model_name):
-    return 'MPI-ESM' if model_name == 'MPI-ESM1-2-LR' else model_name
-
-
 if __name__ == '__main__':
-
-    clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
-    
-    method_names_on_fig = {'RegGMST': 'RegGMST', 'LR': 'Linear reg.','LIM': 'LIM','LIM-opt': 'LIM-opt',
-                        'PullbackDMDc': 'PullbackDMDc', 'PullbackDMDc-2d': 'PullbackDMDc(2d)', 'PullbackDMDc-3d': 'PullbackDMDc(3d)'}
 
     base_path = '/data/databases/dmdc-variants/mmlea_v2/'
     lag = 3
@@ -93,8 +85,8 @@ if __name__ == '__main__':
     print(f'std of total ERF {start_year}-{end_year}: {sigma_forcing:.4f} W m-2', flush=True)
     field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
     per_forcing = f'{field_unit} per W m$^{{-2}}$'
-    cbar_labels = {method_names_on_fig['LR']: per_forcing,
-                   method_names_on_fig['PullbackDMDc']: per_forcing + '\nper 3-month step'}
+    cbar_labels = {METHOD_NAMES_ON_FIG['LR']: per_forcing,
+                   METHOD_NAMES_ON_FIG['PullbackDMDc']: per_forcing + '\nper 3-month step'}
 
     # No difference row: LR's B is a regression coefficient and PullbackDMDc's a per-step input
     # coefficient, so their difference has no consistent meaning.
@@ -102,12 +94,12 @@ if __name__ == '__main__':
     for model in models:
         lr = mean_pattern(patterns[(model, 'LR')]).reshape(len(lat), len(lon)) / sigma_forcing
         dmdcp = mean_pattern(patterns[(model, 'PullbackDMDc')]).reshape(len(lat), len(lon)) / sigma_forcing
-        fields[(model, method_names_on_fig['LR'])] = lr
-        fields[(model, method_names_on_fig['PullbackDMDc'])] = dmdcp
+        fields[(model, METHOD_NAMES_ON_FIG['LR'])] = lr
+        fields[(model, METHOD_NAMES_ON_FIG['PullbackDMDc'])] = dmdcp
 
     row_labels = [
-        method_names_on_fig['LR'],
-        method_names_on_fig['PullbackDMDc'],
+        METHOD_NAMES_ON_FIG['LR'],
+        METHOD_NAMES_ON_FIG['PullbackDMDc'],
     ]
 
     row_limits = {}
@@ -199,7 +191,7 @@ if __name__ == '__main__':
         cbar.set_label(cbar_labels[row_label], fontsize=8)
 
     fig.suptitle(
-        f"{clim_vars_on_fig[clim_var]} B patterns: {method_names_on_fig['LR']} vs {method_names_on_fig['PullbackDMDc']}",
+        f"{CLIM_VARS_ON_FIG[clim_var]} B patterns: {METHOD_NAMES_ON_FIG['LR']} vs {METHOD_NAMES_ON_FIG['PullbackDMDc']}",
         fontsize=title_fontsize,
     )
     out_file = os.path.join(out_dir, f'B_vis_small_{clim_var}.pdf')

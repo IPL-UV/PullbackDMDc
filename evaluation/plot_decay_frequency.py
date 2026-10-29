@@ -3,26 +3,9 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
-CLIM_VAR_LABELS = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
-
 from evaluation.utils.members import SELECTED_HANDLE, mark_selected, selected_index
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
 from utils.params import esms, colors, method_markers, predictions_dir
-
-method_names_on_fig = {
-    'RegGMST': 'RegGMST',
-    'LR': 'Linear reg.',
-    'LIM': 'LIM',
-    'LIM-opt': 'LIM-opt',
-    'PullbackDMDc': 'PullbackDMDc',
-    'PullbackDMDc-2d': 'PullbackDMDc(2d)',
-    'PullbackDMDc-3d': 'PullbackDMDc(3d)',
-}
-
-model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
-
-
-def display_model_name(model_name):
-    return model_display_names.get(model_name, model_name)
 
 
 def compute_yearly_decay_time(lambdas, tau):
@@ -201,7 +184,7 @@ def plot_combined_transposed(data, methods, model_order, top_n, title):
     unique = [(h, l) for h, l in zip(handles, labels) if not (l in seen or seen.add(l))]
     fig.legend(
         [h for h, _ in unique] + [SELECTED_HANDLE],
-        [method_names_on_fig.get(l, l) for _, l in unique] + [SELECTED_HANDLE.get_label()],
+        [METHOD_NAMES_ON_FIG.get(l, l) for _, l in unique] + [SELECTED_HANDLE.get_label()],
         title='Method',
         loc='lower center',
         ncol=len(unique) + 1,
@@ -255,7 +238,7 @@ if __name__ == '__main__':
     for clim_var in clim_vars:
         clim_var = [clim_var]
         clim_var_suffix = '_'.join(clim_var)
-        title = f'Decay Time & Frequency – {" ".join(CLIM_VAR_LABELS.get(cv, cv) for cv in clim_var)}'
+        title = f'Decay Time & Frequency – {" ".join(CLIM_VARS_ON_FIG.get(cv, cv) for cv in clim_var)}'
         fig = plot_combined_transposed(
             data=data_by_var[clim_var[0]],
             methods=methods,

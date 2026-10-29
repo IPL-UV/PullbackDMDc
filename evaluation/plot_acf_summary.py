@@ -5,10 +5,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from evaluation.utils.members import SELECTED_HANDLE, acf_selected_index, mark_selected
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
 
-CLIM_VAR_LABELS = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
- 
 
 def build_suffixes(lag, start_year, end_year):
     if lag == 3:
@@ -182,7 +181,7 @@ def plot_mode_timescale_scatter_grid(
                         transform=ax.get_xaxis_transform(),
                     )
 
-        axes[row_idx, 0].set_ylabel(CLIM_VAR_LABELS[clim_var], fontsize=12)
+        axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=12)
 
     for ax in axes[-1, :]:
         ax.set_xlabel('Years', fontsize=12)
@@ -209,18 +208,6 @@ def main():
     os.makedirs(artifact_results_dir, exist_ok=True)
     os.makedirs(pdf_results_dir, exist_ok=True)
 
-    timescale_bands = {
-        'ENSO': {'xlim': (2.0, 7.0), 'color': 'tab:cyan', 'alpha': 0.12},
-        'PDO': {'xlim': (10.0, 30.0), 'color': 'tab:purple', 'alpha': 0.10},
-    }
-    esm_colors = {
-        '20CRv3': 'black',
-        'CESM2': '#7f7f7f',
-        'MPI-ESM1-2-LR': '#8c564b',
-        'CanESM5': '#2ca02c',
-        'MIROC6': '#0b1f5b',
-    }
-    model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
     obs_model = '20CRv3'
     clim_var_to_method = {cv: ('PullbackDMDc-2d' if cv == 'psl' else 'PullbackDMDc-3d') for cv in clim_vars}
     clim_var_to_marker = {cv: method_markers.get(m, 'o') for cv, m in clim_var_to_method.items()}
@@ -243,9 +230,9 @@ def main():
         selected_by_var=selected_by_var,
         clim_vars=available_clim_vars,
         top_n=top_n,
-        timescale_bands=timescale_bands,
-        esm_colors=esm_colors,
-        model_display_names=model_display_names,
+        timescale_bands=TIMESCALE_BANDS,
+        esm_colors=ESM_COLORS,
+        model_display_names=MODEL_DISPLAY_NAMES,
         obs_model=obs_model,
         clim_var_to_marker=clim_var_to_marker,
     )

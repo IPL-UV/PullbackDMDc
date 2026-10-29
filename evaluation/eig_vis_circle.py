@@ -14,6 +14,7 @@ from utils.params import predictions_dir
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 from evaluation.utils.members import SELECTED_MEMBERS
+from evaluation.utils.style import display_model_name
 
 # Helper functions from eigs_vis.py
 def compute_yearly_decay_time(lambdas, tau):
@@ -56,10 +57,6 @@ def parse_ensemble_member_from_eof_filename(f_name, esm_name):
     if esm_name == 'CESM2':
         return parts[6] if len(parts) > 6 else 'unknown'
     return parts[5] if len(parts) > 5 else (parts[4] if len(parts) > 4 else 'unknown')
-
-
-def display_model_name(model_name):
-    return 'MPI-ESM' if model_name == 'MPI-ESM1-2-LR' else model_name
 
 
 if __name__ == "__main__":

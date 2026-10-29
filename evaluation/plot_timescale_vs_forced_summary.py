@@ -4,6 +4,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
+from evaluation.utils.style import ESM_COLORS, TIMESCALE_BANDS, display_model_name
 from utils.params import esms, method_markers, predictions_dir
 
 
@@ -99,15 +100,6 @@ def plot_forced_fraction_vs_timescale(
 ):
     top_n = 4
 
-    timescale_bands = {
-        'ENSO': {'xlim': (2.0, 7.0),   'color': 'tab:cyan',   'alpha': 0.12},
-        'PDO':  {'xlim': (10.0, 30.0), 'color': 'tab:purple', 'alpha': 0.10},
-    }
-    esm_colors = {
-        '20CRv3': 'black', 'CESM2': '#7f7f7f',
-        'MPI-ESM1-2-LR': '#8c564b', 'CanESM5': '#2ca02c', 'MIROC6': '#0b1f5b',
-    }
-    model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
     obs_model = '20CRv3'
     method_marker = method_markers.get('PullbackDMDc-3d', 'o')
 
@@ -116,7 +108,7 @@ def plot_forced_fraction_vs_timescale(
     legend_handles = []
     for mode_idx in range(top_n):
         ax = axes[mode_idx]
-        for band_cfg in timescale_bands.values():
+        for band_cfg in TIMESCALE_BANDS.values():
             ax.axhspan(*band_cfg['xlim'], color=band_cfg['color'], alpha=band_cfg['alpha'], zorder=0)
 
         for model in esms:
@@ -131,11 +123,11 @@ def plot_forced_fraction_vs_timescale(
             xs, ys = zip(*pairs)
             is_obs = model == obs_model
             sc = ax.scatter(ys, xs,  # forced fraction on x, timescale on y
-                            color=esm_colors.get(model, 'tab:gray'), marker=method_marker,
+                            color=ESM_COLORS.get(model, 'tab:gray'), marker=method_marker,
                             s=108 if is_obs else 36,
                             alpha=1.0 if is_obs else 0.65,
                             linewidths=0.9 if is_obs else 0.3, edgecolor='none', zorder=3,
-                            label=model_display_names.get(model, model))
+                            label=display_model_name(model))
             if mode_idx == 0:
                 legend_handles.append(sc)
 

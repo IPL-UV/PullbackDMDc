@@ -6,6 +6,7 @@ import numpy as np
 from scipy.signal.windows import dpss
 
 from evaluation.utils.members import SELECTED_MEMBERS
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, display_model_name
 from utils.params import esms, predictions_dir
 
 
@@ -79,7 +80,6 @@ lag_suffix  = '' if lag == 3 else '_lag12'
 year_suffix = '' if (start_year, end_year) == (1850, 2014) else '_tier1'
 
 clim_vars        = ['tas_ocean']
-clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
 chosen_method    = 'PullbackDMDc-3d'
 
 base_pred_dir = predictions_dir(year_suffix, lag_suffix)
@@ -89,26 +89,8 @@ top_n = 4
 fs    = 12.0        # monthly data -> 12 samples / year
 NW    = 3           # time-bandwidth product; change to 2 for finer resolution
 
-esm_colors = {
-    '20CRv3':        'black',
-    'CESM2':         '#7f7f7f',
-    'MPI-ESM1-2-LR': '#8c564b',
-    'CanESM5':       '#2ca02c',
-    'MIROC6':        '#0b1f5b',
-}
-model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
-
 # Match the member selection used in plot_modes.py
 esm_member_selection = SELECTED_MEMBERS
-
-# Use distinct line styles so ESM curves are distinguishable even in grayscale.
-esm_linestyles = {
-    '20CRv3': '-',
-    'CESM2': '--',
-    'MPI-ESM1-2-LR': '-.',
-    'CanESM5': ':',
-    'MIROC6': (0, (3, 1, 1, 1)),
-}
 
 # Frequency-band shading (expressed as cy/yr)
 freq_bands = {
@@ -215,9 +197,9 @@ for clim_var in clim_vars:
             )
 
         for chosen_model in esms:
-            color        = esm_colors.get(chosen_model, 'tab:gray')
-            linestyle    = esm_linestyles.get(chosen_model, '-')
-            display_name = model_display_names.get(chosen_model, chosen_model)
+            color        = ESM_COLORS.get(chosen_model, 'tab:gray')
+            linestyle    = ESM_LINESTYLES.get(chosen_model, '-')
+            display_name = display_model_name(chosen_model)
             if not psd_data.get(chosen_model):
                 continue
 
@@ -251,9 +233,9 @@ for clim_var in clim_vars:
 
     # shared legend placed below the figure
     legend_handles = [
-        plt.Line2D([], [], color=esm_colors.get(m, 'tab:gray'),
-                   linestyle=esm_linestyles.get(m, '-'),
-                   lw=2, label=model_display_names.get(m, m))
+        plt.Line2D([], [], color=ESM_COLORS.get(m, 'tab:gray'),
+                   linestyle=ESM_LINESTYLES.get(m, '-'),
+                   lw=2, label=display_model_name(m))
         for m in esms
         if psd_data.get(m)
     ]
@@ -272,7 +254,7 @@ for clim_var in clim_vars:
     res_yr   = 1.0 / res_cyyr
 
     fig.suptitle(
-        (f'{clim_vars_on_fig[clim_var]}: Power spectral density  -  '
+        (f'{CLIM_VARS_ON_FIG[clim_var]}: Power spectral density  -  '
          f'Multitaper MTM, NW={NW}, K={2*NW-1} tapers  -  '
          f'resolution {res_cyyr:.3f} cy/yr  ({res_yr:.0f} yr period)'),
         fontsize=17,

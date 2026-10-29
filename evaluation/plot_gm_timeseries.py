@@ -5,6 +5,7 @@ import pickle as pkl
 from utils.data_utils import load_truncated_prediction, load_truth
 from evaluation.utils.metrics import global_mean, global_mean_flat, coord_to_dtindex, smooth_truth
 from evaluation.utils.bootstrap import member_bootstrap_rmsd, paired_difference
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
 from utils.params import esms, method_names, colors, year_ranges, lags
 import matplotlib.pyplot as plt
 import math
@@ -24,16 +25,8 @@ lags=[3]
 year_ranges=[(1850, 2014), (1950, 2014)]
 ###########################################
 
-clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
 units = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}  # GM / regional means are in the data's units
 region_labels = {'n65': 'N of 65°N', 's65': 'S of 65°S'}
-method_names_on_fig = {'RegGMST': 'RegGMST', 'LR': 'Linear reg.','LIM': 'LIM','LIM-opt': 'LIM-opt',
-                       'PullbackDMDc': 'PullbackDMDc', 'PullbackDMDc-2d': 'PullbackDMDc(2d)', 'PullbackDMDc-3d': 'PullbackDMDc(3d)'}
-method_order_on_fig = ['RegGMST', 'LIM-opt', 'LIM',  'PullbackDMDc', 'LR', 'PullbackDMDc-2d', 'PullbackDMDc-3d']
-
-
-def display_model_name(model_name):
-    return 'MPI-ESM' if model_name == 'MPI-ESM1-2-LR' else model_name
 
 
 volcanic_events = [
@@ -750,8 +743,8 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
     return fig, axes, ci_rows
 
 def save_timeseries_figure(timeseries, var, pdf_results_dir, out_name, label_prefix='GM'):
-    fig, axes, ci_rows = plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
-                                         method_names_on_fig, var, label_prefix=label_prefix)
+    fig, axes, ci_rows = plot_timeseries(timeseries, esms, method_names, colors, CLIM_VARS_ON_FIG,
+                                         METHOD_NAMES_ON_FIG, var, label_prefix=label_prefix)
 
     out_csv = os.path.join(pdf_results_dir, f'{out_name}_rmsd_by_period_ci.csv')
     pd.DataFrame(ci_rows, columns=ci_columns).to_csv(out_csv, index=False)

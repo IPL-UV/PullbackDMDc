@@ -12,8 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from evaluation.plot_gm_timeseries import method_names_on_fig, clim_vars_on_fig
-from evaluation.plot_gm_timeseries import display_model_name
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name, p95_abs
 from evaluation.utils.trends import trend_window, window_label
 from utils.params import (pdf_root, requested_lags, requested_year_ranges, requested_clim_vars,
                           run_suffixes, results_dir)
@@ -21,11 +20,6 @@ from utils.params import (pdf_root, requested_lags, requested_year_ranges, reque
 obs = '20CRv3'
 units = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'hPa'}
 map_cmap = 'RdBu_r'
-
-
-def p95_abs(maps):
-    """95th percentile of |map| pooled over maps, NaNs ignored (as in plot_modes.py, which runs on import)."""
-    return max(np.nanpercentile(np.abs(np.concatenate([m.ravel() for m in maps])), 95), 1e-12)
 
 
 def lat_extent(maps, lat):
@@ -63,7 +57,7 @@ def plot_trend_figure(npz, metrics, var, wlabel):
             ax.set_extent([-180, 180] + extent, crs=ccrs.PlateCarree())
             ax.coastlines(linewidth=0.5)
             if i == 0:
-                ax.set_title('Truth (ESM ensemble mean)' if c == 'truth' else method_names_on_fig.get(c, c),
+                ax.set_title('Truth (ESM ensemble mean)' if c == 'truth' else METHOD_NAMES_ON_FIG.get(c, c),
                              fontsize=11)
             if j == 0:
                 ax.text(-0.04, 0.5, display_model_name(d), transform=ax.transAxes, rotation=90, ha='right',
@@ -80,7 +74,7 @@ def plot_trend_figure(npz, metrics, var, wlabel):
 
     fmt = '%.2f' if scale < 1 else '%.1f'
     cbar = fig.colorbar(mappable, ax=axes, orientation='horizontal', fraction=0.04, pad=0.03, aspect=50, format=fmt)
-    cbar.set_label(f'{clim_vars_on_fig[var]} trend {wlabel} ({units[var]}/decade)', fontsize=11)
+    cbar.set_label(f'{CLIM_VARS_ON_FIG[var]} trend {wlabel} ({units[var]}/decade)', fontsize=11)
     return fig
 
 

@@ -7,6 +7,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from evaluation.utils.members import (SELECTED_HANDLE, acf_selected_index, mark_selected, method_files,
                                       selected_index)
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, TIMESCALE_BANDS, display_model_name
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
 
 
@@ -276,24 +277,11 @@ def plot_summary_figure(
     top_n = 4
     rng = np.random.default_rng(0)
 
-    clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT', 'tas_masked': 'SAT-masked'}
-    timescale_bands = {
-        'ENSO': {'xlim': (2.0, 7.0),   'color': 'tab:cyan',   'alpha': 0.12},
-        'PDO':  {'xlim': (10.0, 30.0), 'color': 'tab:purple', 'alpha': 0.10},
-    }
-    esm_colors = {
-        '20CRv3': 'black',
-        'CESM2': '#7f7f7f',
-        'MPI-ESM1-2-LR': '#8c564b',
-        'CanESM5': '#2ca02c',
-        'MIROC6': '#0b1f5b',
-    }
-    model_display_names = {'MPI-ESM1-2-LR': 'MPI-ESM'}
     obs_model = '20CRv3'
     method_marker = method_markers.get('PullbackDMDc-3d', 'o')
  
     positions = np.arange(1, len(esms) + 1)
-    tick_labels = [model_display_names.get(model, model) for model in esms]
+    tick_labels = [display_model_name(model) for model in esms]
     row2_bounds_by_model = {}
     for model_name, member_sets in row2_smoothed_var.items():
         pooled_values = []
@@ -348,7 +336,7 @@ def plot_summary_figure(
             ax = axes[row_idx, mode_idx]
 
             if row_idx == 0:
-                for band_name, band_cfg in timescale_bands.items():
+                for band_name, band_cfg in TIMESCALE_BANDS.items():
                     ax.axvspan(
                         band_cfg['xlim'][0], band_cfg['xlim'][1],
                         color=band_cfg['color'], alpha=band_cfg['alpha'], zorder=0,
@@ -382,7 +370,7 @@ def plot_summary_figure(
                 ax.scatter(
                     values[valid],
                     np.full(valid.sum(), pos) + jitter,
-                    color=esm_colors.get(chosen_model, 'tab:gray'),
+                    color=ESM_COLORS.get(chosen_model, 'tab:gray'),
                     marker=marker,
                     s=36,
                     alpha=1.0 if chosen_model == obs_model else 0.65,
@@ -426,7 +414,7 @@ def plot_summary_figure(
         label='20CRv3 member',
     )
 
-    fig.suptitle(f'{clim_vars_on_fig[clim_var]}: Robustness', fontsize=18)
+    fig.suptitle(f'{CLIM_VARS_ON_FIG[clim_var]}: Robustness', fontsize=18)
     fig.legend(handles=[SELECTED_HANDLE], loc='lower center', bbox_to_anchor=(0.5, -0.03), frameon=False,
                fontsize=11)
 

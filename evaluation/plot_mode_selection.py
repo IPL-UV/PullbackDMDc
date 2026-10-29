@@ -4,46 +4,9 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 
+from evaluation.utils.style import (CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, METHOD_NAMES_ON_FIG,
+                                   display_model_name)
 from utils.params import artifact_root, esms, method_markers, predictions_dir
-
-
-CLIM_VAR_LABELS = {
-	"tas": "SAT",
-	"psl": "SLP",
-	"tas_ocean": "OSAT",
-}
-
-MODEL_DISPLAY_NAMES = {
-	"MPI-ESM1-2-LR": "MPI-ESM",
-}
-
-METHOD_NAMES_ON_FIG = {
-	"PullbackDMDc": "PullbackDMDc",
-	"PullbackDMDc-2d": "PullbackDMDc(2d)",
-	"PullbackDMDc-3d": "PullbackDMDc(3d)",
-}
-
-# Keep ESM colors consistent with other evaluation scripts.
-ESM_COLORS = {
-	"20CRv3": "black",
-	"CESM2": "#7f7f7f",
-	"MPI-ESM1-2-LR": "#8c564b",
-	"CanESM5": "#2ca02c",
-	"MIROC6": "#0b1f5b",
-}
-
-# Distinct linestyles make models separable in grayscale prints.
-ESM_LINESTYLES = {
-	"20CRv3": "-",
-	"CESM2": "--",
-	"MPI-ESM1-2-LR": "-.",
-	"CanESM5": ":",
-	"MIROC6": (0, (3, 1, 1, 1)),
-}
-
-
-def display_model_name(model_name):
-	return MODEL_DISPLAY_NAMES.get(model_name, model_name)
 
 
 def display_method_name(method_name):
@@ -315,7 +278,7 @@ def plot_decay_with_acf_row(data_by_var, acf_coverage_by_var, clim_vars, n_modes
 		top_ax.axvline(4.5, color="red", linestyle="--", linewidth=1.6, alpha=0.9, zorder=4)
 		bottom_ax.axvline(4.5, color="red", linestyle="--", linewidth=1.6, alpha=0.9, zorder=4)
 		top_ax.set_title(
-			f"{CLIM_VAR_LABELS.get(clim_var, clim_var)} | {display_method_name(method)} ",
+			f"{CLIM_VARS_ON_FIG.get(clim_var, clim_var)} | {display_method_name(method)} ",
 			fontsize=12,
 		)
 		# top_ax.set_yscale("log")

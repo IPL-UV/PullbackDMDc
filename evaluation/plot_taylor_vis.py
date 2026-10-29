@@ -4,6 +4,7 @@ import numpy as np
 import os
 import json
 from evaluation.utils.metrics import add_one_custom_plot, compute_taylor_std_range
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
 from evaluation.utils.trends import parse_window, window_label
 from utils.params import artifact_root, colors, method_names, esms, year_ranges, lags, method_markers, pdf_root, requested_lags, requested_year_ranges
 from utils.params import requested_clim_vars
@@ -18,14 +19,6 @@ year_ranges=[(1850, 2014)]#, (1950, 2014)]
 # Choose which Taylor metrics to plot: 'raw' or 'trend'.
 taylor_plot_mode = os.getenv('PBDMDC_TAYLOR_MODE', 'trend')
 ###########################################
-
-clim_vars_on_fig = {'tas_ocean': 'OSAT', 'psl': 'SLP', 'tas': 'SAT'}
-method_names_on_fig = {'RegGMST': 'RegGMST', 'LR': 'Linear reg.','LIM': 'LIM','LIM-opt': 'LIM-opt',
-                       'PullbackDMDc': 'PullbackDMDc', 'PullbackDMDc-2d': 'PullbackDMDc(2d)', 'PullbackDMDc-3d': 'PullbackDMDc(3d)'}
-
-
-def display_model_name(model_name):
-    return 'MPI-ESM' if model_name == 'MPI-ESM1-2-LR' else model_name
 
 
 def get_mode_config(mode):
@@ -195,7 +188,7 @@ if __name__ == '__main__':
 
             classic_td.append({
                 **model_metrics[method]['total'],
-                'name': method_names_on_fig[method],
+                'name': METHOD_NAMES_ON_FIG[method],
                 'color': color,
                 'alpha': 1,
                 'size': 8,
@@ -299,7 +292,7 @@ if __name__ == '__main__':
                     'MIROC6': fig.add_subplot(bottom_grid[1, 1]),
                 }
                 fig.suptitle(
-                    f"Forced response ({mode_config['title_mode']}): {clim_vars_on_fig[var]}",
+                    f"Forced response ({mode_config['title_mode']}): {CLIM_VARS_ON_FIG[var]}",
                     fontsize=20,
                     y=0.92,
                 )
@@ -442,7 +435,7 @@ if __name__ == '__main__':
                         marker=method_markers[method],
                         linestyle='',
                         markersize=6,
-                        label=method_names_on_fig[method],
+                        label=METHOD_NAMES_ON_FIG[method],
                     )
                     for method in method_names
                 ]
@@ -503,11 +496,11 @@ if __name__ == '__main__':
                 baseline_methods = ['RegGMST', 'LIM', 'LIM-opt', 'LR']
                 pullback_methods = ['PullbackDMDc', 'PullbackDMDc-2d', 'PullbackDMDc-3d']
                 baseline_handles = [
-                    next(handle for handle in method_handles if handle.get_label() == method_names_on_fig[method])
+                    next(handle for handle in method_handles if handle.get_label() == METHOD_NAMES_ON_FIG[method])
                     for method in baseline_methods
                 ]
                 pullback_handles = [
-                    next(handle for handle in method_handles if handle.get_label() == method_names_on_fig[method])
+                    next(handle for handle in method_handles if handle.get_label() == METHOD_NAMES_ON_FIG[method])
                     for method in pullback_methods
                 ]
 
