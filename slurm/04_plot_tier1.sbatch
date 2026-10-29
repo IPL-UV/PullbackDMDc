@@ -22,6 +22,6 @@ source /opt/ohpc/pub/miniforge3/bin/activate dmdc_variants
 cd "$REPO_ROOT"
 
 export PBDMDC_TAYLOR_MODE=raw
-python -m evaluation.plot_taylor_vis
+python -m evaluation.plot_taylor
 
 python -m evaluation.plot_gm_timeseries

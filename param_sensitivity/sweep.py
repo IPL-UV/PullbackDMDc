@@ -20,11 +20,10 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from evaluation.compute_trend_taylor_viz import compute_linear_trend
 from evaluation.plot_gm_timeseries import is_in_volcanic
 from evaluation.utils.metrics import global_mean, regional_mean, smooth_truth, coord_to_dtindex, lat_flat_from_pars
 from evaluation.utils.taylor_diagram import TaylorDiagramEstimator
-from evaluation.utils.trends import window_mask
+from evaluation.utils.trends import compute_linear_trend, window_mask
 from utils.data_utils import load_data, load_forcings, load_forcings_pullback, load_forcings_2d, load_forcings_3d, load_truth
 from utils.lim import LIM
 from utils.lim_opt import LIM_opt

@@ -29,7 +29,7 @@ def get_mode_config(mode):
             'output_prefix': 'classic_taylor_diagram',
         }
     if mode == 'trend':
-        # Optional trend window (R2-M2), as written by compute_trend_taylor_viz with PBDMDC_TREND_WINDOW.
+        # Optional trend window (R2-M2), as written by compute_trend_taylor with PBDMDC_TREND_WINDOW.
         raw_window = os.getenv('PBDMDC_TREND_WINDOW', '').strip()
         if raw_window:
             window = parse_window(raw_window)

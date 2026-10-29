@@ -21,9 +21,11 @@ source /opt/ohpc/pub/miniforge3/bin/activate dmdc_variants
 cd "$REPO_ROOT"
 
 export PBDMDC_YEAR_RANGES=1850-2014,1950-2014
-python -m evaluation.compute_taylor_vis
+python -m evaluation.compute_taylor
 python -m evaluation.compute_gm_timeseries
 
 export PBDMDC_YEAR_RANGES=1850-2014
-python -m evaluation.compute_trend_taylor_viz
+python -m evaluation.compute_trend_taylor
+PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.compute_trend_taylor
+PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.compute_trend_maps
 python -m evaluation.compute_acfs

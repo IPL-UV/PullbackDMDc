@@ -22,18 +22,22 @@ source /opt/ohpc/pub/miniforge3/bin/activate dmdc_variants
 cd "$REPO_ROOT"
 
 export PBDMDC_TAYLOR_MODE=raw
-python -m evaluation.plot_taylor_vis
+python -m evaluation.plot_taylor
 
 export PBDMDC_TAYLOR_MODE=trend
-python -m evaluation.plot_taylor_vis
+python -m evaluation.plot_taylor
+PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.plot_taylor
+PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.plot_trend_maps
 
 python -m evaluation.plot_gm_timeseries
+python -m evaluation.plot_seasonal_cycle_shift
 python -m evaluation.plot_modes
-python -m evaluation.eig_vis_circle
+python -m evaluation.plot_eigenvalue_scatter
 python -m evaluation.plot_decay_frequency
-python -m evaluation.plot_mode_selection
+python -m evaluation.plot_decay_lines
 python -m evaluation.plot_psd_mtm
-python -m evaluation.plot_timescale_vs_forced_summary
-python -m evaluation.plot_acf_summary
-python -m evaluation.plot_mode_summary_three_rows
-python -m evaluation.B_vis_small
+python -m evaluation.plot_forced_fraction_vs_timescale
+python -m evaluation.plot_acf_zero_crossing
+python -m evaluation.plot_acf_efolding
+python -m evaluation.plot_mode_summary
+python -m evaluation.plot_B_vis_small

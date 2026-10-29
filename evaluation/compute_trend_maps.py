@@ -2,7 +2,7 @@
 
 Trends are computed in PC space: every estimator predicts fr_pcs @ eofs + data_mean, so a member's trend
 map is slope(pcs) @ eofs. Metrics are computed in the sqrt(cos lat)-scaled space (area weighted), as in
-compute_trend_taylor_viz.py; maps are unscaled to K or hPa per decade for plotting.
+compute_trend_taylor.py; maps are unscaled to K or hPa per decade for plotting.
 Run: PBDMDC_LAGS=3 PBDMDC_YEAR_RANGES=1850-2014 PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.compute_trend_maps
 """
 import json
@@ -35,7 +35,7 @@ def to_map(flat, pars, var):
 
 
 def check_against_full_period_json(metrics_rows, json_path, var):
-    """With the full period as window, pooled metrics must equal compute_trend_taylor_viz's JSON."""
+    """With the full period as window, pooled metrics must equal compute_trend_taylor's JSON."""
     with open(json_path) as f:
         td = json.load(f)
     worst = 0.0

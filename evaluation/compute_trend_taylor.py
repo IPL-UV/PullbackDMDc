@@ -43,7 +43,7 @@ if __name__ == '__main__':
                 )
 
                 # td_metrics[model][method] = {'ensemble': [...], 'total': {...}}
-                # same structure as compute_taylor_vis.py, but values are from trend maps
+                # same structure as compute_taylor.py, but values are from trend maps
                 td_metrics = {}
 
                 for model in esms:
