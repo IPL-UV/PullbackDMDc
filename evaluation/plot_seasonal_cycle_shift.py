@@ -31,7 +31,9 @@ mode_ks = [2, 3]  # modes 3 and 4
 smooth_sigma_years = 8  # as internal_smooth_sigma in plot_modes.py
 per_century = 100.0
 map_cmap = 'RdBu_r'
-n_perm = 1000
+n_boot = 1000
+block_years = 11
+level = 99
 
 season_hues = {'DJF': '#0072B2', 'MAM': '#009E73', 'JJA': '#D55E00', 'SON': '#CC79A7'}
 season_months = {'DJF': [11, 0, 1], 'MAM': [2, 3, 4], 'JJA': [5, 6, 7], 'SON': [8, 9, 10]}
@@ -61,18 +63,21 @@ def ols_trend(years, Y):
     return slope * per_century, se * per_century
 
 
-def permutation_significance(years, C, trend):
-    """True where |trend| exceeds 95% of the trends with permuted years.
+def block_bootstrap_significance(years, C, trend):
+    """True where |trend| exceeds the level-th percentile of trends of block-bootstrapped detrended series.
 
-    DJF trend - JJA trend is the trend of C = DJF - JJA, so one trend per permutation suffices.
+    DJF trend - JJA trend is the trend of C = DJF - JJA, so one trend per surrogate suffices.
     """
     rng = np.random.default_rng(0)
     n = len(years)
+    assert n % block_years == 0, f'{n} years do not split into {block_years}-year blocks'
     t = years - years.mean()
-    perms = np.stack([rng.permutation(n) for _ in range(n_perm)])
     Cc = (C - C.mean(axis=0)).reshape(n, -1)
-    null = (t[perms] @ Cc) / (t @ t) * per_century
-    return np.abs(trend) > np.percentile(np.abs(null), 95, axis=0).reshape(trend.shape)
+    resid = Cc - np.outer(t, trend.reshape(-1) / per_century)
+    starts = rng.integers(0, n - block_years + 1, size=(n_boot, n // block_years))
+    idx = (starts[:, :, None] + np.arange(block_years)).reshape(n_boot, -1)
+    null = np.stack([t @ resid[rows] for rows in idx]) / (t @ t) * per_century
+    return np.abs(trend) > np.percentile(np.abs(null), level, axis=0).reshape(trend.shape)
 
 
 def box_stats(lat, lon, trend, significant, box):
@@ -135,7 +140,7 @@ def obs_contrast_trend_map(var, year_suffix):
     years, X = by_month(unscale(truth.values, lat), coord_to_dtindex(truth.time))
     C = contrast(X)
     trend = ols_trend(years, C)[0]
-    return lat, lon, trend, permutation_significance(years, C, trend)
+    return lat, lon, trend, block_bootstrap_significance(years, C, trend)
 
 
 def modes34(var, region, method, dmd, pars, time_index):
@@ -264,7 +269,7 @@ def plot_drift(year_suffix, run_suffix):
         cbar = fig.colorbar(m, ax=map_axes, orientation='horizontal', fraction=0.06, aspect=50,
                             format='%g')
         cbar.set_label(f'{var_names[var]} DJF − JJA trend, {by["raw"][0][0]}–{by["raw"][0][-1]} '
-                       f'({units[var]}/century); stippling: |{obs} trend| exceeds 95% of {n_perm} year-permuted trends',
+                       f'({units[var]}/century); stippling: |{obs} trend| exceeds {level}% of {n_boot} block-bootstrap ({block_years}-yr) null trends',
                        fontsize=9)
         if i == 0:
             ax_obs.set_title(obs, fontsize=12)
