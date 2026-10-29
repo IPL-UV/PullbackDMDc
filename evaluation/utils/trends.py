@@ -23,3 +23,9 @@ def window_mask(years, window):
 
 def window_label(window):
     return f'{window[0]}-{window[1]}'
+
+
+def compute_linear_trend(field_2d: np.ndarray) -> np.ndarray:
+    """Compute linear trend at each spatial point for data shaped (time, space)."""
+    time_index = np.arange(field_2d.shape[0], dtype=np.float64)
+    return np.polyfit(time_index, field_2d, 1)[0]

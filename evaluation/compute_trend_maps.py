@@ -13,9 +13,8 @@ import time
 import numpy as np
 import pandas as pd
 
-from evaluation.compute_trend_taylor_viz import compute_linear_trend
 from evaluation.utils.taylor_diagram import TaylorDiagramEstimator
-from evaluation.utils.trends import trend_window, window_mask, window_label
+from evaluation.utils.trends import compute_linear_trend, trend_window, window_mask, window_label
 from utils.data_utils import load_truncated_prediction, load_truth, undo_lat_scaling
 from utils.params import (artifact_root, requested_lags, requested_year_ranges, requested_clim_vars,
                           requested_methods, predictions_dir, run_suffixes, results_dir)

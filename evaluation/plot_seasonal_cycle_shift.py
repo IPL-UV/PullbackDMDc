@@ -15,7 +15,6 @@ from cartopy.util import add_cyclic_point
 from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
 from scipy.ndimage import gaussian_filter1d
 
-from evaluation.plot_gm_timeseries import units
 from evaluation.utils.metrics import coord_to_dtindex, global_mean_flat, lat_flat_from_pars, regional_mean
 from utils.data_utils import load_truth, undo_lat_scaling
 from utils.params import (artifact_root, pdf_root, predictions_dir, requested_lags, requested_year_ranges,
@@ -27,6 +26,7 @@ panels = [('SAT N of 65°N', 'tas', 'n65', 'PullbackDMDc-3d'),
 # (lat_min, lat_max, lon_min, lon_max); npac covers the negative DJF-JJA SLP trend of the North Pacific.
 boxes = {'n65': (65, 90, 0, 360), 'npac': (25, 45, 135, 195)}
 var_names = {'tas': 'SAT', 'psl': 'SLP'}
+units = {'tas': 'K', 'psl': 'Pa'}  # regional means are in the data's units
 mode_ks = [2, 3]  # modes 3 and 4
 smooth_sigma_years = 8  # as internal_smooth_sigma in plot_modes.py
 per_century = 100.0

@@ -6,17 +6,11 @@ import time
 import numpy as np
 
 from evaluation.utils.taylor_diagram import TaylorDiagramEstimator
-from evaluation.utils.trends import parse_window, window_mask, window_label
+from evaluation.utils.trends import compute_linear_trend, parse_window, window_mask, window_label
 from utils.data_utils import load_prediction, load_truth
 from utils.params import (artifact_root, esms, lags, method_names, year_ranges, requested_lags, requested_year_ranges,
                           predictions_dir, requested_clim_vars, requested_methods, run_suffixes, results_dir,
                           guard_main_results_write)
-
-
-def compute_linear_trend(field_2d: np.ndarray) -> np.ndarray:
-    """Compute linear trend at each spatial point for data shaped (time, space)."""
-    time_index = np.arange(field_2d.shape[0], dtype=np.float64)
-    return np.polyfit(time_index, field_2d, 1)[0]
 
 
 if __name__ == '__main__':
