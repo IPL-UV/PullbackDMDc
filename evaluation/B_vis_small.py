@@ -7,7 +7,7 @@ import xarray as xr
 
 from utils.data_utils import undo_lat_scaling, load_forcings
 from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
-from utils.params import predictions_dir
+from utils.params import pdf_root, predictions_dir
 
 
 def mean_pattern(patterns):
@@ -43,7 +43,7 @@ if __name__ == '__main__':
 
     base_pred_dir = predictions_dir(year_suffix, lag_suffix)
     clim_dir = os.path.join(base_pred_dir, clim_var)
-    out_dir = os.path.join('.', f'evaluation_results/results{year_suffix}{lag_suffix}')
+    out_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
     os.makedirs(out_dir, exist_ok=True)
 
     sample_ds = xr.load_dataset(

@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from evaluation.utils.style import ESM_COLORS, TIMESCALE_BANDS, display_model_name
-from utils.params import esms, method_markers, predictions_dir
+from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
 
 
 def first_zero_crossing_time(acf_values, dt):
@@ -165,11 +165,12 @@ def main():
     smooth_sigma = 12 * 8  # kept for output filename consistency
 
     base_pred_dir = predictions_dir(year_suffix, lag_suffix)
-    results_dir = os.path.join('.', f'evaluation_results/results{year_suffix}{lag_suffix}')
+    artifact_results_dir = os.path.join(artifact_root, 'evaluation_results', f'results{year_suffix}{lag_suffix}')
+    results_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
     os.makedirs(results_dir, exist_ok=True)
 
     for clim_var in clim_vars:
-        acf_path = os.path.join(results_dir, f'acfs_{clim_var}_{chosen_method}.pkl')
+        acf_path = os.path.join(artifact_results_dir, f'acfs_{clim_var}_{chosen_method}.pkl')
         if not os.path.exists(acf_path):
             print(f'Skipping {clim_var}: missing ACF file {acf_path}')
             continue

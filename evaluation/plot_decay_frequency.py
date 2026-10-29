@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 from evaluation.utils.members import SELECTED_HANDLE, mark_selected, selected_index
 from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
-from utils.params import esms, colors, method_markers, predictions_dir
+from utils.params import esms, colors, method_markers, pdf_root, predictions_dir
 
 
 def compute_yearly_decay_time(lambdas, tau):
@@ -224,7 +224,7 @@ if __name__ == '__main__':
     top_n = 4
 
     base_pred_dir = predictions_dir(year_suffix, lag_suffix)
-    results_dir = os.path.join('.', f'evaluation_results/results{year_suffix}{lag_suffix}')
+    results_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
     os.makedirs(results_dir, exist_ok=True)
 
     data_by_var = {cv: load_eig_data(cv, methods, top_n, base_pred_dir) for cv in clim_vars}

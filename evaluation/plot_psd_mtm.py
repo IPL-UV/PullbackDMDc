@@ -7,7 +7,7 @@ from scipy.signal.windows import dpss
 
 from evaluation.utils.members import SELECTED_MEMBERS
 from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, display_model_name
-from utils.params import esms, predictions_dir
+from utils.params import esms, pdf_root, predictions_dir
 
 
 def parse_ensemble_member_from_filename(f_name, esm_name):
@@ -83,7 +83,7 @@ clim_vars        = ['tas_ocean']
 chosen_method    = 'PullbackDMDc-3d'
 
 base_pred_dir = predictions_dir(year_suffix, lag_suffix)
-results_dir   = os.path.join('.', f'evaluation_results/results{year_suffix}{lag_suffix}')
+results_dir   = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
 
 top_n = 4
 fs    = 12.0        # monthly data -> 12 samples / year

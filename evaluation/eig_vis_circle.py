@@ -10,7 +10,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import glob
 from utils.data_utils import undo_lat_scaling
-from utils.params import predictions_dir
+from utils.params import pdf_root, predictions_dir
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 from evaluation.utils.members import SELECTED_MEMBERS
@@ -251,5 +251,7 @@ if __name__ == "__main__":
 
     fig.tight_layout(rect=[0, 0.08, 1, 1])
 
-    plt.savefig(f'evaluation_results/results{year_suffix}{lag_suffix}/eigenvalue_scatter_by_decay_rank_{clim_var}.pdf', dpi=300, bbox_inches='tight')
+    out_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
+    os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(os.path.join(out_dir, f'eigenvalue_scatter_by_decay_rank_{clim_var}.pdf'), dpi=300, bbox_inches='tight')
     plt.show()

@@ -6,7 +6,7 @@ import numpy as np
 
 from evaluation.utils.style import (CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, METHOD_NAMES_ON_FIG,
                                    display_model_name)
-from utils.params import artifact_root, esms, method_markers, predictions_dir
+from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
 
 
 def display_method_name(method_name):
@@ -325,7 +325,7 @@ def main():
 		raise ValueError(f"Invalid sample size for ACF confidence bands: {sample_size}")
 
 	base_pred_dir = predictions_dir(year_suffix, lag_suffix)
-	results_dir = os.path.join(".", f"evaluation_results/results{year_suffix}{lag_suffix}")
+	results_dir = os.path.join(pdf_root, f"results{year_suffix}{lag_suffix}")
 	artifact_results_dir = os.path.join(artifact_root, "evaluation_results", f"results{year_suffix}{lag_suffix}")
 	os.makedirs(results_dir, exist_ok=True)
 
