@@ -98,169 +98,175 @@ freq_bands = {
     'PDO':  {'flim': (1. / 30., 1. / 10.), 'color': 'tab:purple',  'alpha': 0.12},
 }
 
-os.makedirs(results_dir, exist_ok=True)
 
-# ---------------------------------------------------------------
-# Main loop over climate variables
-# ---------------------------------------------------------------
-for clim_var in clim_vars:
-
-    # psd_data[model] = list over members of (top_n, n_freqs) arrays
-    psd_data  = {}
-    freq_axis = None   # shared across all models/members once set
-
-    for chosen_model in esms:
-        model_dir = os.path.join(base_pred_dir, clim_var, chosen_model)
-        if not os.path.isdir(model_dir):
-            print(f'Skipping missing model directory: {model_dir}')
-            psd_data[chosen_model] = []
-            continue
-
-        dmd_files = sorted([
-            os.path.join(model_dir, fn)
-            for fn in os.listdir(model_dir)
-            if fn.split('_')[-1].split('.')[0] == chosen_method
-        ])
-
-        selected_member = esm_member_selection.get(chosen_model, '')
-        dmd_files = [
-            f_path
-            for f_path in dmd_files
-            if parse_ensemble_member_from_filename(os.path.basename(f_path), chosen_model) == selected_member
-        ]
-
-        if not dmd_files:
-            print(
-                f'No {chosen_method} file for {clim_var} / {chosen_model} '
-                f'member={selected_member!r}'
-            )
-            psd_data[chosen_model] = []
-            continue
-
-        member_psds = []
-
-        for dmd_file in dmd_files:
-            with open(dmd_file, 'rb') as fh:
-                dmd = pickle.load(fh)
-            dmd.compute_modes()
-
-            rotated = dmd.compute_rotated_modes(top_n=top_n)
-            eigvals = rotated['eigvals']
-            modes = rotated['spatial_patterns']
-            internal_ts = rotated['internal_time_series']
-            labels = rotated['labels']
-            plot_n = min(top_n, eigvals.size)
-
-            mode_psds = [None] * top_n
-            for k in range(plot_n):
-                freqs, psd = multitaper_psd(internal_ts[:, k], fs=fs, NW=NW)
-                if labels[k][1] == 'complex':
-                    mode_psds[k] = psd
-                else:
-                    spatial_norm_sq = float(np.sum(modes[:, k] ** 2))
-                    # multiply by ||w||^2 so that ∫ PSD df = ||w||^2 * var(z)
-                    # = variance of the reconstructed field in PC space
-                    mode_psds[k] = spatial_norm_sq * psd
-
-            if freq_axis is None:
-                freq_axis = freqs   # cy/yr, same for every file
-
-            member_psds.append(np.stack(mode_psds))   # (top_n, n_freqs)
-
-        psd_data[chosen_model] = member_psds
+def main():
+    os.makedirs(results_dir, exist_ok=True)
 
     # ---------------------------------------------------------------
-    # Plot: one panel per mode
+    # Main loop over climate variables
     # ---------------------------------------------------------------
-    fig, axes = plt.subplots(
-        1, top_n,
-        figsize=(4.5 * top_n, 4.5),
-        constrained_layout=True,
-        sharey=True,
-    )
+    for clim_var in clim_vars:
 
-    for mode_idx in range(top_n):
-        ax = axes[mode_idx]
-
-        # frequency-band shading
-        for band_name, band_cfg in freq_bands.items():
-            ax.axvspan(
-                band_cfg['flim'][0], band_cfg['flim'][1],
-                color=band_cfg['color'], alpha=band_cfg['alpha'], zorder=0,
-            )
-            label_f = np.sqrt(band_cfg['flim'][0] * band_cfg['flim'][1])
-            ax.text(
-                label_f, 0.97, band_name,
-                ha='center', va='top', fontsize=12,
-                color=band_cfg['color'],
-                transform=ax.get_xaxis_transform(),
-            )
+        # psd_data[model] = list over members of (top_n, n_freqs) arrays
+        psd_data  = {}
+        freq_axis = None   # shared across all models/members once set
 
         for chosen_model in esms:
-            color        = ESM_COLORS.get(chosen_model, 'tab:gray')
-            linestyle    = ESM_LINESTYLES.get(chosen_model, '-')
-            display_name = display_model_name(chosen_model)
-            if not psd_data.get(chosen_model):
+            model_dir = os.path.join(base_pred_dir, clim_var, chosen_model)
+            if not os.path.isdir(model_dir):
+                print(f'Skipping missing model directory: {model_dir}')
+                psd_data[chosen_model] = []
                 continue
 
-            # One line per selected ensemble member (matching plot_modes selection).
-            psd = psd_data[chosen_model][0][mode_idx]
-            ax.plot(
-                freq_axis, psd,
-                color=color, linestyle=linestyle, lw=2.0, alpha=0.95, zorder=3,
-                label=display_name,
-            )
+            dmd_files = sorted([
+                os.path.join(model_dir, fn)
+                for fn in os.listdir(model_dir)
+                if fn.split('_')[-1].split('.')[0] == chosen_method
+            ])
 
-        ax.set_xscale('log')
-        ax.set_yscale('log')
-        ax.set_title(f'Mode {mode_idx + 1}', fontsize=17)
-        ax.set_xlabel('Frequency (cycles / year)', fontsize=15)
-        ax.grid(True, which='both', alpha=0.2)
-        ax.tick_params(labelsize=14)
+            selected_member = esm_member_selection.get(chosen_model, '')
+            dmd_files = [
+                f_path
+                for f_path in dmd_files
+                if parse_ensemble_member_from_filename(os.path.basename(f_path), chosen_model) == selected_member
+            ]
 
-        # secondary x-axis: period in years
-        ax2 = ax.secondary_xaxis(
-            'top',
-            functions=(lambda f: 1.0 / f, lambda p: 1.0 / p),
+            if not dmd_files:
+                print(
+                    f'No {chosen_method} file for {clim_var} / {chosen_model} '
+                    f'member={selected_member!r}'
+                )
+                psd_data[chosen_model] = []
+                continue
+
+            member_psds = []
+
+            for dmd_file in dmd_files:
+                with open(dmd_file, 'rb') as fh:
+                    dmd = pickle.load(fh)
+                dmd.compute_modes()
+
+                rotated = dmd.compute_rotated_modes(top_n=top_n)
+                eigvals = rotated['eigvals']
+                modes = rotated['spatial_patterns']
+                internal_ts = rotated['internal_time_series']
+                labels = rotated['labels']
+                plot_n = min(top_n, eigvals.size)
+
+                mode_psds = [None] * top_n
+                for k in range(plot_n):
+                    freqs, psd = multitaper_psd(internal_ts[:, k], fs=fs, NW=NW)
+                    if labels[k][1] == 'complex':
+                        mode_psds[k] = psd
+                    else:
+                        spatial_norm_sq = float(np.sum(modes[:, k] ** 2))
+                        # multiply by ||w||^2 so that ∫ PSD df = ||w||^2 * var(z)
+                        # = variance of the reconstructed field in PC space
+                        mode_psds[k] = spatial_norm_sq * psd
+
+                if freq_axis is None:
+                    freq_axis = freqs   # cy/yr, same for every file
+
+                member_psds.append(np.stack(mode_psds))   # (top_n, n_freqs)
+
+            psd_data[chosen_model] = member_psds
+
+        # ---------------------------------------------------------------
+        # Plot: one panel per mode
+        # ---------------------------------------------------------------
+        fig, axes = plt.subplots(
+            1, top_n,
+            figsize=(4.5 * top_n, 4.5),
+            constrained_layout=True,
+            sharey=True,
         )
-        ax2.set_xlabel('Period (years)', fontsize=14)
-        ax2.tick_params(labelsize=13)
 
-        if mode_idx == 0:
-            # PCs carry the field's units (sqrt(cos lat)-weighted anomalies on unit-norm EOFs).
-            field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
-            ax.set_ylabel(f'PSD  [{field_unit}$^2$ / (cy yr$^{{-1}}$)]', fontsize=15)
+        for mode_idx in range(top_n):
+            ax = axes[mode_idx]
 
-    # shared legend placed below the figure
-    legend_handles = [
-        plt.Line2D([], [], color=ESM_COLORS.get(m, 'tab:gray'),
-                   linestyle=ESM_LINESTYLES.get(m, '-'),
-                   lw=2, label=display_model_name(m))
-        for m in esms
-        if psd_data.get(m)
-    ]
-    fig.legend(
-        handles=legend_handles,
-        loc='lower center',
-        ncol=len(esms),
-        fontsize=14,
-        framealpha=0.9,
-        bbox_to_anchor=(0.5, -0.14),
-    )
+            # frequency-band shading
+            for band_name, band_cfg in freq_bands.items():
+                ax.axvspan(
+                    band_cfg['flim'][0], band_cfg['flim'][1],
+                    color=band_cfg['color'], alpha=band_cfg['alpha'], zorder=0,
+                )
+                label_f = np.sqrt(band_cfg['flim'][0] * band_cfg['flim'][1])
+                ax.text(
+                    label_f, 0.97, band_name,
+                    ha='center', va='top', fontsize=12,
+                    color=band_cfg['color'],
+                    transform=ax.get_xaxis_transform(),
+                )
 
-    # resolution annotation in figure title
-    T_years  = (end_year - start_year + 1)
-    res_cyyr = 2 * NW / T_years
-    res_yr   = 1.0 / res_cyyr
+            for chosen_model in esms:
+                color        = ESM_COLORS.get(chosen_model, 'tab:gray')
+                linestyle    = ESM_LINESTYLES.get(chosen_model, '-')
+                display_name = display_model_name(chosen_model)
+                if not psd_data.get(chosen_model):
+                    continue
 
-    fig.suptitle(
-        (f'{CLIM_VARS_ON_FIG[clim_var]}: Power spectral density  -  '
-         f'Multitaper MTM, NW={NW}, K={2*NW-1} tapers  -  '
-         f'resolution {res_cyyr:.3f} cy/yr  ({res_yr:.0f} yr period)'),
-        fontsize=17,
-    )
+                # One line per selected ensemble member (matching plot_modes selection).
+                psd = psd_data[chosen_model][0][mode_idx]
+                ax.plot(
+                    freq_axis, psd,
+                    color=color, linestyle=linestyle, lw=2.0, alpha=0.95, zorder=3,
+                    label=display_name,
+                )
 
-    out_path = os.path.join(results_dir, f'psd_mtm_{clim_var}_{chosen_method}.pdf')
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f'Saved: {out_path}')
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+            ax.set_title(f'Mode {mode_idx + 1}', fontsize=17)
+            ax.set_xlabel('Frequency (cycles / year)', fontsize=15)
+            ax.grid(True, which='both', alpha=0.2)
+            ax.tick_params(labelsize=14)
+
+            # secondary x-axis: period in years
+            ax2 = ax.secondary_xaxis(
+                'top',
+                functions=(lambda f: 1.0 / f, lambda p: 1.0 / p),
+            )
+            ax2.set_xlabel('Period (years)', fontsize=14)
+            ax2.tick_params(labelsize=13)
+
+            if mode_idx == 0:
+                # PCs carry the field's units (sqrt(cos lat)-weighted anomalies on unit-norm EOFs).
+                field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
+                ax.set_ylabel(f'PSD  [{field_unit}$^2$ / (cy yr$^{{-1}}$)]', fontsize=15)
+
+        # shared legend placed below the figure
+        legend_handles = [
+            plt.Line2D([], [], color=ESM_COLORS.get(m, 'tab:gray'),
+                       linestyle=ESM_LINESTYLES.get(m, '-'),
+                       lw=2, label=display_model_name(m))
+            for m in esms
+            if psd_data.get(m)
+        ]
+        fig.legend(
+            handles=legend_handles,
+            loc='lower center',
+            ncol=len(esms),
+            fontsize=14,
+            framealpha=0.9,
+            bbox_to_anchor=(0.5, -0.14),
+        )
+
+        # resolution annotation in figure title
+        T_years  = (end_year - start_year + 1)
+        res_cyyr = 2 * NW / T_years
+        res_yr   = 1.0 / res_cyyr
+
+        fig.suptitle(
+            (f'{CLIM_VARS_ON_FIG[clim_var]}: Power spectral density  -  '
+             f'Multitaper MTM, NW={NW}, K={2*NW-1} tapers  -  '
+             f'resolution {res_cyyr:.3f} cy/yr  ({res_yr:.0f} yr period)'),
+            fontsize=17,
+        )
+
+        out_path = os.path.join(results_dir, f'psd_mtm_{clim_var}_{chosen_method}.pdf')
+        fig.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f'Saved: {out_path}')
+
+
+if __name__ == '__main__':
+    main()

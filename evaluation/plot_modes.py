@@ -45,7 +45,6 @@ cbar_labels = {'tas': 'K per 1σ of mode time series',
 
 
 results_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
-os.makedirs(results_dir, exist_ok=True)
 
 
 eofs_base_path = os.path.join(artifact_root, f'eofs{year_suffix}')
@@ -515,32 +514,38 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
     plt.show()
 
 
-for clim_var in clim_vars:
+def main():
+    os.makedirs(results_dir, exist_ok=True)
+    for clim_var in clim_vars:
 
-    if clim_var == 'psl':
-        chosen_method = 'PullbackDMDc-2d'
-    else:
-        chosen_method = 'PullbackDMDc-3d'
+        if clim_var == 'psl':
+            chosen_method = 'PullbackDMDc-2d'
+        else:
+            chosen_method = 'PullbackDMDc-3d'
 
-    datasets = {}
-    for (chosen_model, chosen_member) in esm_list:
-        d = load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method)
-        if d is not None:
-            datasets[chosen_model] = d
-    if not datasets:
-        continue
+        datasets = {}
+        for (chosen_model, chosen_member) in esm_list:
+            d = load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method)
+            if d is not None:
+                datasets[chosen_model] = d
+        if not datasets:
+            continue
 
-    # R2-L432: forced-variance ratio of modes 1-2 for the member shown in each figure.
-    # Plus the forced fraction of each plotted mode's time series (variance of the orange curves).
-    ratio_rows = [{'dataset': m, 'member': dict(esm_list)[m], 'forced_var_ratio_12': d['forced_var_ratio_12'],
-                   **{f'forced_fraction_mode{k + 1}': f for k, f in enumerate(d['forced_fraction'])}}
-                  for m, d in datasets.items()]
-    for row, d in zip(ratio_rows, datasets.values()):
-        print(f'{clim_var} {row["dataset"]}: var(modes 1-2 forced) / var(forced) = {row["forced_var_ratio_12"]:.3f}; '
-              f'forced fraction per mode = {np.round(d["forced_fraction"], 3)}', flush=True)
-    out_csv = os.path.join(results_dir, f'forced_variance_ratio_{clim_var}.csv')
-    pd.DataFrame(ratio_rows).to_csv(out_csv, index=False)
-    print(f'Saved: {out_csv}', flush=True)
+        # R2-L432: forced-variance ratio of modes 1-2 for the member shown in each figure.
+        # Plus the forced fraction of each plotted mode's time series (variance of the orange curves).
+        ratio_rows = [{'dataset': m, 'member': dict(esm_list)[m], 'forced_var_ratio_12': d['forced_var_ratio_12'],
+                       **{f'forced_fraction_mode{k + 1}': f for k, f in enumerate(d['forced_fraction'])}}
+                      for m, d in datasets.items()]
+        for row, d in zip(ratio_rows, datasets.values()):
+            print(f'{clim_var} {row["dataset"]}: var(modes 1-2 forced) / var(forced) = {row["forced_var_ratio_12"]:.3f}; '
+                  f'forced fraction per mode = {np.round(d["forced_fraction"], 3)}', flush=True)
+        out_csv = os.path.join(results_dir, f'forced_variance_ratio_{clim_var}.csv')
+        pd.DataFrame(ratio_rows).to_csv(out_csv, index=False)
+        print(f'Saved: {out_csv}', flush=True)
 
-    for chosen_model, d in datasets.items():
-        plot_mode_figure(clim_var, chosen_model, d, p95_abs(d['modes_data']))
+        for chosen_model, d in datasets.items():
+            plot_mode_figure(clim_var, chosen_model, d, p95_abs(d['modes_data']))
+
+
+if __name__ == '__main__':
+    main()
