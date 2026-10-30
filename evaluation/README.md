@@ -27,7 +27,7 @@ One script per figure family, in two stages:
 | `plot_taylor` | `compute_taylor` (`PBDMDC_TAYLOR_MODE=raw`) or `compute_trend_taylor` (`=trend`) | `classic_taylor_diagram[_trend[_{window}]]_{var}.pdf` |
 | `plot_trend_maps` | `compute_trend_maps` | `trend_maps_{window}_{var}.pdf` |
 | `plot_gm_timeseries` | `compute_gm_timeseries` | `gm_{var}.pdf`, `region_{var}_{region}.pdf`, `*_rmsd_by_period_ci.csv` |
-| `plot_seasonal_cycle_shift` | models, means | `seasonal_cycle_drift_20CRv3.pdf`, `..._summary.csv` |
+| `plot_seasonal_cycle_shift` | models, means | `seasonal_cycle_drift_20CRv3_{tas,psl}.pdf`, `seasonal_cycle_drift_esm_ensmean.pdf`, `seasonal_cycle_drift_20CRv3_summary.csv` |
 | `plot_modes` | models, EOFs | `dmd_modes_{dataset}_{var}.pdf`, `forced_variance_ratio_{var}.csv` |
 | `plot_eigenvalue_scatter` | models | `eigenvalue_scatter_by_decay_rank_{var}.pdf` |
 | `plot_decay_frequency` | models | `decay_frequency_top{n}_{var}.pdf` |
