@@ -7,8 +7,7 @@ from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
-from evaluation.utils.members import (SELECTED_HANDLE, acf_selected_index, mark_selected, method_files,
-                                      selected_index)
+from evaluation.utils.members import acf_selected_index, mark_selected, method_files, selected_index
 from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS
 from evaluation.utils.timescales import efolding_time, zero_crossing_time, eig_decay_time_years
 from utils.params import artifact_root, esms, pdf_root, predictions_dir, requested_clim_vars
@@ -16,10 +15,13 @@ from utils.params import artifact_root, esms, pdf_root, predictions_dir, request
 
 # (key, legend label, scatter style, vertical offset within a dataset row)
 QUANTITIES = [
-    ('efold', 'e-folding time of internal ACF', dict(marker='o'), 0.25),
-    ('zero4', '4 × first zero crossing of internal ACF', dict(marker='s', facecolors='none'), 0.0),
-    ('eigdecay', 'DMD eigenvalue decay time', dict(marker='x'), -0.25),
+    ('efold', 'ACF e-folding time', dict(marker='o'), 0.25),
+    ('zero4', '4 × first ACF zero crossing', dict(marker='s', facecolors='none'), 0.0),
+    ('eigdecay', 'DMD decay time', dict(marker='x'), -0.25),
 ]
+
+# Text sized for a one-row figure printed at text width.
+FONTSIZE = 11
 
 
 def chosen_method_for(clim_var):
@@ -62,7 +64,7 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
     fig, axes = plt.subplots(
         n_rows,
         top_n,
-        figsize=(12, 3.2 * n_rows),
+        figsize=(10, 3.6 * n_rows),
         sharex=True,
         sharey=True,
         constrained_layout=True,
@@ -107,32 +109,34 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
 
             ax.set_yticks(positions)
             ax.set_yticklabels(model_tick_labels)
-            ax.set_ylim(positions[0] - 0.5, positions[-1] + 0.5)
+            # Extra headroom above the top dataset keeps the band labels clear of the data.
+            ax.set_ylim(positions[0] - 0.5, positions[-1] + 0.9)
             ax.set_xscale('log')
+            ax.tick_params(labelsize=FONTSIZE)
             ax.grid(True, axis='x', which='major', alpha=0.3)
             ax.grid(True, axis='x', which='minor', alpha=0.15)
-            for pos in positions[:-1]:
+            for pos in positions:
                 ax.axhline(pos + 0.5, color='lightgray', linewidth=0.6, zorder=1)
 
-            if row_idx == n_rows - 1:
+            # Band labels as in the mode figures: first panel only, at the top.
+            if row_idx == 0 and mode_idx == 0:
                 for band_name, band_cfg in timescale_bands.items():
-                    ax.text(np.sqrt(band_cfg['xlim'][0] * band_cfg['xlim'][1]), 0.01, band_name,
-                            ha='center', va='bottom', fontsize=9, color=band_cfg['color'],
+                    ax.text(np.sqrt(band_cfg['xlim'][0] * band_cfg['xlim'][1]), 0.98, band_name,
+                            ha='center', va='top', fontsize=FONTSIZE, color=band_cfg['color'],
                             transform=ax.get_xaxis_transform())
 
         axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=12)
 
     for ax in axes[-1, :]:
-        ax.set_xlabel('Years', fontsize=12)
+        ax.set_xlabel('Timescale (years)', fontsize=12)
 
     legend_handles = [
         Line2D([0], [0], linestyle='None', color='black', markerfacecolor='none' if style.get('facecolors') == 'none' else 'black',
                marker=style['marker'], markersize=6, label=label)
         for _, label, style, _ in QUANTITIES
-    ] + [SELECTED_HANDLE]
-    fig.legend(handles=legend_handles, loc='lower center', ncol=4, fontsize=11,
-               bbox_to_anchor=(0.5, -0.04), frameon=False)
-    fig.suptitle('Time scales of the leading dynamic modes', fontsize=18)
+    ]
+    fig.legend(handles=legend_handles, loc='lower center', ncol=len(legend_handles), fontsize=FONTSIZE,
+               bbox_to_anchor=(0.5, -0.1), frameon=False)
     return fig
 
 
@@ -194,6 +198,8 @@ def main():
     if not available_clim_vars:
         print('No requested climate variables had ACF files. Nothing to plot.')
         return
+    # The summary covers every variable; the figure shows OSAT only, one row like the robustness figure.
+    plot_clim_vars = [cv for cv in available_clim_vars if cv == 'tas_ocean'] or available_clim_vars
 
     summary = pd.DataFrame(summary_rows(timescales_by_var, top_n))
     out_csv = os.path.join(pdf_results_dir, 'acf_timescales_summary.csv')
@@ -206,9 +212,9 @@ def main():
     print('\nMedian e-folding time / median eigenvalue decay time:')
     print(ratio.to_string())
 
-    fig = plot_timescale_grid(timescales_by_var, available_clim_vars, top_n, TIMESCALE_BANDS,
+    fig = plot_timescale_grid(timescales_by_var, plot_clim_vars, top_n, TIMESCALE_BANDS,
                               ESM_COLORS, MODEL_DISPLAY_NAMES, obs_model)
-    out_path = os.path.join(pdf_results_dir, f'acf_efolding_{"_".join(available_clim_vars)}.pdf')
+    out_path = os.path.join(pdf_results_dir, f'acf_efolding_{"_".join(plot_clim_vars)}.pdf')
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f'Saved: {out_path}')

@@ -35,7 +35,7 @@ One script per figure family, in two stages:
 | `plot_psd_mtm` | models | `psd_mtm_{var}_{method}.pdf` |
 | `plot_B_vis_small` | models | `B_vis_small_{var}.pdf` |
 | `plot_acf_zero_crossing` | `compute_acfs`, models | `acf_zero_crossing_{vars}_with_rotation.pdf` |
-| `plot_acf_efolding` | `compute_acfs`, models | `acf_efolding_{vars}.pdf`, `acf_timescales_summary.csv` |
+| `plot_acf_efolding` | `compute_acfs`, models | `acf_efolding_tas_ocean.pdf`, `acf_timescales_summary.csv` |
 | `plot_mode_summary` | `compute_acfs`, models | `mode_summary_three_rows_{var}_{method}_sigma{s}.pdf` |
 | `plot_forced_fraction_vs_timescale` | `compute_acfs`, models | `forced_fraction_vs_timescale_{var}_{method}_sigma{s}.pdf` |
 
