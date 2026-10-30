@@ -1,11 +1,13 @@
-"""R2-M5 sensitivity figures: GM / polar-cap RMSD against truncation N, lag and tas_ocean domain.
+"""R2-M5 sensitivity figures: GM / polar-cap RMSD against truncation N, lag, tas_ocean domain and forcing history.
 
-Reads SENS_ROOT/results/{main,domain}/*.csv written by sweep.py and writes to pdf_root/param_sensitivity/
-  pullback_rmsd.{pdf,png}   headline PullbackDMDc (-3d SAT/OSAT, -2d SLP) only, all variables on one N axis
-  methods_rmsd.{pdf,png}    baselines and PullbackDMDc, one row per variable / index
-  rmsd_quantiles.csv        member quartiles behind both figures
-Lines are the member median over the four ESMs, bands the IQR. Members with a hard failure (unstable, nonfinite,
-fit_error) for any method at any setting of a sweep are dropped from that sweep, so every line uses the same members.
+Reads SENS_ROOT/results/{main,domain,history}/*.csv written by sweep.py and writes to pdf_root/param_sensitivity/
+  pullback_rmsd.{pdf,png}         headline PullbackDMDc (-3d SAT/OSAT, -2d SLP S65) only: per-member RMSD minus
+                                  that member's RMSD at the main setting; median and IQR with each ESM weighted equally
+  pullback_drmsd_quantiles.csv    quartiles behind pullback_rmsd
+  methods_rmsd.{pdf,png}          baselines and PullbackDMDc, one row per variable / index; pooled member median / IQR
+  rmsd_quantiles.csv              member quartiles behind methods_rmsd
+Members with a hard failure (unstable, nonfinite, fit_error) for any method at any setting of a sweep are dropped
+from that sweep, so every line uses the same members.
 The domain column is drawn if results/domain/*.csv exist (see README.md).
   python -m param_sensitivity.plot_rmsd
 """
@@ -18,13 +20,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from utils.params import artifact_root, colors, n_eofs, pdf_root
+from evaluation.utils.style import METHOD_NAMES_ON_FIG
+from utils.params import artifact_root, colors, n_eofs, pdf_root, transition_time
 
 SENS_ROOT = os.getenv('PBDMDC_SENS_ROOT', os.path.join(artifact_root, 'param_sensitivity'))  # as in sweep.py
 RES = os.path.join(SENS_ROOT, 'results')
 FIG = os.path.join(pdf_root, 'param_sensitivity')
 SWEEPS = ['N', 'lag', 'domain']
-SWEEP_TITLE = {'N': 'Truncation', 'lag': 'Lag', 'domain': 'Domain (OSAT only)'}
+SWEEP_TITLE = {'N': 'Truncation', 'lag': 'Lag', 'domain': 'Domain (OSAT only)', 'history': 'Forcing history'}
+PB_SWEEPS = ['N', 'lag', 'domain', 'history']
 DOMAINS = ['main', '65S65N', '90S90N']
 DOMAIN_LABEL = {'main': '40S–65N\n(main)', '65S65N': '65S–65N', '90S90N': '90S–90N'}
 METHOD_ORDER = ['RegGMST', 'LR', 'LIM', 'LIM-opt', 'PullbackDMDc-2d', 'PullbackDMDc-3d']
@@ -33,25 +37,37 @@ SERIES = [('tas', 'gm', 'SAT global mean', '#2a78d6', '-'),
           ('tas_ocean', 'gm', 'OSAT global mean', '#eb6834', '-'),
           ('psl', 's65', 'SLP S of 65°S', '#1baf7a', '-'),
           ('psl', 'n65', 'SLP N of 65°N', '#1baf7a', '--')]
+# (var, index, label, headline variant, colour, marker): Okabe-Ito colours, one marker per variable for grayscale.
+PB_SERIES = [('tas', 'gm', 'SAT GM', 'PullbackDMDc-3d', '#0072B2', 'o'),
+             ('tas_ocean', 'gm', 'OSAT GM', 'PullbackDMDc-3d', '#D55E00', 's'),
+             ('psl', 's65', 'SLP south of 65°S', 'PullbackDMDc-2d', '#009E73', '^')]
 
 
 def load():
     df = pd.concat([pd.read_csv(f) for f in sorted(glob.glob(os.path.join(RES, 'main', '*.csv'))
-                                                   + glob.glob(os.path.join(RES, 'domain', '*.csv')))],
+                                                   + glob.glob(os.path.join(RES, 'domain', '*.csv'))
+                                                   + glob.glob(os.path.join(RES, 'history', '*.csv')))],
                    ignore_index=True)
+    df['history'] = df.get('history', pd.Series(np.nan, index=df.index)).fillna(transition_time)  # older CSVs
     eig_methods = df.method.isin(['LIM', 'LIM-opt']) | df.method.str.startswith('PullbackDMDc')
     df['hard_fail'] = (((df.lead_abs >= 1) & eig_methods) | df.nonfinite.fillna(False).astype(bool)
                        | df.fit_error.notna())
     return df
 
 
+def is_main(df):
+    return ((df.domain == 'main') & (df.N == df['var'].map(n_eofs)) & (df.lag == 3)
+            & (df.history == transition_time))
+
+
 def sweeps(df):
-    """Rows of each one-at-a-time sweep, keyed by config value x. The main config belongs to all three."""
-    main_n = df['var'].map(n_eofs)
-    is_main = (df.domain == 'main') & (df.N == main_n) & (df.lag == 3)
-    out = {'N': df[(df.domain == 'main') & (df.lag == 3)].assign(x=lambda d: d.N),
-           'lag': df[(df.domain == 'main') & (df.N == main_n)].assign(x=lambda d: d.lag),
-           'domain': df[((df.domain != 'main') | is_main) & (df['var'] == 'tas_ocean')].assign(x=lambda d: d.domain)}
+    """Rows of each one-at-a-time sweep, keyed by config value x (history in years). The main config belongs to all."""
+    main_n, main_h = df['var'].map(n_eofs), df.history == transition_time
+    out = {'N': df[(df.domain == 'main') & (df.lag == 3) & main_h].assign(x=lambda d: d.N),
+           'lag': df[(df.domain == 'main') & (df.N == main_n) & main_h].assign(x=lambda d: d.lag),
+           'domain': df[(((df.domain != 'main') & main_h) | is_main(df))
+                        & (df['var'] == 'tas_ocean')].assign(x=lambda d: d.domain),
+           'history': df[(df.domain == 'main') & (df.N == main_n) & (df.lag == 3)].assign(x=lambda d: d.history / 12)}
     return {k: v.assign(sweep=k) for k, v in out.items()}
 
 
@@ -77,15 +93,53 @@ def quantiles(sw):
     return pd.DataFrame(rows)
 
 
+def weighted_quantile(x, w, qs):
+    o = np.argsort(x)
+    x, w = x[o], w[o]
+    return np.interp(qs, (np.cumsum(w) - 0.5 * w) / w.sum(), x)
+
+
+def deltas(sw):
+    """Per-member RMSD minus the same member's RMSD at the main config; quartiles weight every ESM equally."""
+    rows = []
+    for sweep, d in sw.items():
+        d = fixed_set(d)
+        for var, idx_name, _, method, *_ in PB_SERIES:
+            e = d[(d['var'] == var) & (d.method == method)]
+            if e.empty:
+                continue
+            rmsd = np.sqrt(e[f'{idx_name}_mse_full']) / e[f'{idx_name}_truth_std'] * 100
+            main = rmsd[is_main(e)].groupby([e.esm, e.member]).first()
+            e = e.assign(d=rmsd.values - main.reindex(pd.MultiIndex.from_frame(e[['esm', 'member']])).values)
+            for x, g in e.groupby('x'):
+                w = 1. / g.groupby('esm').member.transform('count').values
+                q = weighted_quantile(g.d.values, w, [0.25, 0.5, 0.75])
+                rows.append(dict(var=var, index=idx_name, sweep=sweep, x=x, method=method, n_members=len(g),
+                                 q25=q[0], q50=q[1], q75=q[2]))
+    return pd.DataFrame(rows)
+
+
 def xpos(sweep, x):
     return DOMAINS.index(x) if sweep == 'domain' else x
 
 
-def style_ax(ax, sweep, var, relative_n=False):
+def style_ax(ax, sweep, var, relative_n=False, main_line_domain=False):
     if sweep == 'domain':
         ax.set_xticks(range(len(DOMAINS)))
-        ax.set_xticklabels([DOMAIN_LABEL[d] for d in DOMAINS], fontsize=8)
+        if main_line_domain:  # main marked by the dashed line, as in the other columns
+            ax.set_xticklabels([DOMAIN_LABEL[d].split('\n')[0] for d in DOMAINS], fontsize=8)
+            ax.axvline(DOMAINS.index('main'), color='0.6', lw=0.8, ls='--', zorder=0)
+        else:
+            ax.set_xticklabels([DOMAIN_LABEL[d] for d in DOMAINS], fontsize=8)
         ax.set_xlim(-0.4, len(DOMAINS) - 0.6)
+    elif sweep == 'history':
+        ax.set_xscale('symlog', linthresh=1, linscale=0.5)  # 0 yr = cold start in 1850
+        ax.set_xticks([0, 1, 2, 5, 10, 25, 50, 99])
+        ax.set_xticklabels(['0', '1', '2', '5', '10', '25', '50', '99'], fontsize=8)
+        ax.minorticks_off()
+        ax.set_xlim(-0.2, 130)
+        ax.axvline(transition_time / 12, color='0.6', lw=0.8, ls='--', zorder=0)
+        ax.set_xlabel('forcing history before 1850 (years)', fontsize=9)
     else:
         if relative_n:
             vals, labels, main = [0.5, 1, 2, 4], ['×0.5', '×1', '×2', '×4'], 1
@@ -108,12 +162,12 @@ def style_ax(ax, sweep, var, relative_n=False):
         ax.spines[s].set_visible(False)
 
 
-def draw(ax, q, sweep, color, ls='-', label=None, band=True, scale=1.):
+def draw(ax, q, sweep, color, ls='-', label=None, band=True, scale=1., marker='o'):
     px = np.array([xpos(sweep, x) for x in q.x]) / scale
     o = np.argsort(px)
     if band:
         ax.fill_between(px[o], q.q25.values[o], q.q75.values[o], color=color, alpha=0.15, lw=0)
-    ax.plot(px[o], q.q50.values[o], color=color, ls=ls, lw=2, marker='o', ms=4, label=label)
+    ax.plot(px[o], q.q50.values[o], color=color, ls=ls, lw=2, marker=marker, ms=4, label=label)
 
 
 def save(fig, name):
@@ -122,22 +176,27 @@ def save(fig, name):
     plt.close(fig)
 
 
-def plot_pullback(qt):
-    fig, axes = plt.subplots(1, 3, figsize=(11, 3.8), sharey=True)
-    for ax, sweep in zip(axes, SWEEPS):
-        for var, idx_name, label, color, ls in SERIES:
-            q = qt[(qt['var'] == var) & (qt['index'] == idx_name) & (qt.sweep == sweep)
-                   & qt.method.str.startswith('PullbackDMDc')]
-            if not q.empty:
-                draw(ax, q, sweep, color, ls, label, band=ls == '-', scale=n_eofs[var] if sweep == 'N' else 1.)
-        style_ax(ax, sweep, None, relative_n=sweep == 'N')
-        ax.set_title(SWEEP_TITLE[sweep], fontsize=10)
-    axes[0].set_ylabel('RMSD (% of truth std)', fontsize=9)
+def plot_pullback(dq):
+    fig, axes = plt.subplots(1, len(PB_SWEEPS), figsize=(13, 3.6), sharey=True)
+    for k, (ax, sweep) in enumerate(zip(axes, PB_SWEEPS)):
+        ax.axhline(0, color='0.3', lw=0.8, ls=':', zorder=0)
+        for var, idx_name, label, method, color, marker in PB_SERIES:
+            q = dq[(dq['var'] == var) & (dq['index'] == idx_name) & (dq.sweep == sweep)]
+            if q.empty:
+                continue
+            label = f'{label}, {METHOD_NAMES_ON_FIG[method]}'
+            if sweep == 'domain':  # categories: points with IQR error bars, no connecting line
+                px = [xpos(sweep, x) for x in q.x]
+                ax.errorbar(px, q.q50, yerr=[q.q50 - q.q25, q.q75 - q.q50], color=color, fmt=marker, ms=5,
+                            capsize=3, lw=1.2, label=label)
+            else:
+                draw(ax, q, sweep, color, label=label, scale=n_eofs[var] if sweep == 'N' else 1., marker=marker)
+        style_ax(ax, sweep, None, relative_n=sweep == 'N', main_line_domain=True)
+        ax.set_title(f'({"abcd"[k]}) {SWEEP_TITLE[sweep]}', fontsize=10, loc='left')
+    axes[0].set_ylabel('ΔRMSD (percentage points\nof ground-truth std)', fontsize=9)
     h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, loc='lower center', ncol=4, fontsize=9, frameon=False, handlelength=3.5)
-    fig.suptitle('PullbackDMDc: member median (line) and IQR (band) over the four ESMs; '
-                 'dashed vertical = main setting', fontsize=10)
-    fig.tight_layout(rect=(0, 0.08, 1, 0.97))
+    fig.legend(h, l, loc='lower center', ncol=len(l), fontsize=9, frameon=False, handlelength=3)
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
     save(fig, 'pullback_rmsd')
 
 
@@ -178,7 +237,9 @@ def main():
 
     qt = quantiles(sw)
     qt.round(4).to_csv(os.path.join(FIG, 'rmsd_quantiles.csv'), index=False)
-    plot_pullback(qt)
+    dq = deltas(sw)
+    dq.round(4).to_csv(os.path.join(FIG, 'pullback_drmsd_quantiles.csv'), index=False)
+    plot_pullback(dq)
     plot_methods(qt)
     print(f'Saved figures and rmsd_quantiles.csv to {FIG}')
 

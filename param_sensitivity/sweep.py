@@ -1,7 +1,7 @@
 """R2-M5 parameter sweep: refit every method for one (var, ESM) at several truncations / lags and score it.
 
 Methods are fitted from the precomputed EOF pickles exactly as in experiments.py, but nothing is pickled:
-each fit is scored in PC space and one CSV row per (member, method, N, lag) is written, with
+each fit is scored in PC space and one CSV row per (member, method, N, lag, history) is written, with
   - GM / polar-cap per-period MSE against the ensemble mean (as plot_gm_timeseries; psl truth smoothed 3 yr),
   - trend-map corr / normalised rmse over 1985-2014 (as compute_trend_maps, unsmoothed truth),
   - failure diagnostics (leading eigenvalue, e-folding time, nonfinite, fit errors).
@@ -91,10 +91,10 @@ def lead_eig(op, lag):
             'lead_efold_months': efold}
 
 
-def fit_method(method, eof_dict, N, lag, forcings, gmst):
+def fit_method(method, eof_dict, N, lag, history, forcings, gmst):
     if method.startswith('PullbackDMDc'):
-        short, long_ = forcings[method]
-        m = PullbackDMDc(truncation=N, lag=lag, transition_time=transition_time)
+        short, long_ = forcings[method][history]
+        m = PullbackDMDc(truncation=N, lag=lag, transition_time=history)
         m.fit(None, short, long_, precomputed_eofs=eof_dict)
         diag = lead_eig(m.A, lag)
     elif method == 'LIM':
@@ -130,11 +130,13 @@ def score_member(eof_path, tas_path, var, methods, configs, forcings, truth, tde
     member = os.path.basename(eof_path)[:-4]
 
     rows = []
-    for N, lag in configs:
+    for N, lag, history in configs:
         for method in methods:
-            row = {'member': member, 'method': method, 'N': N, 'lag': lag, 'fit_error': ''}
+            if history != transition_time and not method.startswith('PullbackDMDc'):
+                continue  # baselines do not use the forcing history
+            row = {'member': member, 'method': method, 'N': N, 'lag': lag, 'history': history, 'fit_error': ''}
             try:
-                fr_pcs, eofs, diag = fit_method(method, eof_dict, N, lag, forcings, gmst)
+                fr_pcs, eofs, diag = fit_method(method, eof_dict, N, lag, history, forcings, gmst)
             except np.linalg.LinAlgError as e:
                 row['fit_error'] = f'LinAlgError: {e}'
                 rows.append(row)
@@ -164,6 +166,9 @@ def main():
     ap.add_argument('--esm', required=True)
     ap.add_argument('--truncations', default='', help='comma list; empty = main value only')
     ap.add_argument('--lags', default='3', help='comma list; non-3 lags use the main truncation')
+    ap.add_argument('--histories', default='',
+                    help='comma list of forcing histories before 1850 (months) at the main truncation and lag; '
+                         'replaces the truncation / lag configs')
     ap.add_argument('--methods', default='', help='comma list; default = headline PullbackDMDc + 4 baselines')
     ap.add_argument('--eof-root', default=os.path.join(artifact_root, 'eofs'))
     ap.add_argument('--eof-root-large', default=os.path.join(SENS_ROOT, 'psl_n400', 'eofs'),
@@ -181,22 +186,24 @@ def main():
     n_main = n_eofs[var]
     truncs = [int(x) for x in args.truncations.split(',') if x] or [n_main]
     lags = [int(x) for x in args.lags.split(',') if x]
-    configs = [(N, 3) for N in truncs] + [(n_main, lag) for lag in lags if lag != 3]
+    histories = [int(x) for x in args.histories.split(',') if x]
+    configs = ([(n_main, 3, h) for h in histories] if histories else
+               [(N, 3, transition_time) for N in truncs] + [(n_main, lag, transition_time) for lag in lags if lag != 3])
     methods = [m for m in args.methods.split(',') if m] or [headline_pb(var), 'LIM', 'LIM-opt', 'LR', 'RegGMST']
 
     forcings = {'LR': load_forcings(mean_center=True, rescale=True)}
     for m, loader in [('PullbackDMDc', load_forcings_pullback), ('PullbackDMDc-2d', load_forcings_2d),
                       ('PullbackDMDc-3d', load_forcings_3d)]:
         if m in methods:
-            forcings[m] = loader(transition_time)
+            forcings[m] = {h: loader(h) for h in {c[2] for c in configs}}
 
     truth = load_truth_indices(var, esm, args.means_root)
     tde = TaylorDiagramEstimator(centered=False, normalized=True)
 
     # Configs above the stored EOF count use the larger store (same SVD, more EOFs).
     groups = {}
-    for N, lag in configs:
-        groups.setdefault(N > 200 and bool(args.eof_root_large), []).append((N, lag))
+    for cfg in configs:
+        groups.setdefault(cfg[0] > 200 and bool(args.eof_root_large), []).append(cfg)
 
     eof_dir = os.path.join(args.eof_root, var, esm)
     files = sorted(f for f in os.listdir(eof_dir) if f.endswith('.pkl') and 'historical' in f

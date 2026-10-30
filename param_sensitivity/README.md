@@ -1,4 +1,4 @@
-# Parameter sensitivity (truncation, lag, tas_ocean domain)
+# Parameter sensitivity (truncation, lag, tas_ocean domain, forcing history)
 
 The parameters are varied one at a time, with the other two held at their main values:
 
@@ -7,6 +7,9 @@ The parameters are varied one at a time, with the other two held at their main v
 | Truncation N | 20 for SAT/OSAT, 200 for SLP | {10, 20, 40, 80} for SAT/OSAT, {100, 200, 400} for SLP |
 | Lag | 3 months | {1, 3, 6, 12} months |
 | tas_ocean latitude band | 40S–65N | 65S–65N, 90S–90N |
+| Forcing history before 1850 (PullbackDMDc only) | 99 yr (`transition_time` = 1188 months) | 0, 1, 2, 5, 10, 25, 50 yr |
+
+The forcing history is capped at 99 yr because the forcing record starts in 1750. It changes only the spin-up integration of the forced response: A and B are fitted on 1850–2014 either way.
 
 For each setting, every method is refitted on the shared EOF basis: the headline PullbackDMDc (-3d for SAT and OSAT, -2d for SLP), LIM, LIM-opt, LR and RegGMST. The fit is then scored against the ensemble mean, for all 1850–2014 members of CESM2, MPI-ESM1-2-LR, CanESM5 and MIROC6.
 
@@ -24,16 +27,19 @@ Results go under `SENS_ROOT`, which is `$PBDMDC_SENS_ROOT`, or `$PBDMDC_ARTIFACT
 - `psl_n400/eofs/`: the 400-EOF psl store.
 - `results/main/sweep_{var}_{ESM}.csv`: one row per (member, method, N, lag).
 - `results/domain/`: the domain sweep.
+- `results/history/sweep_{var}_{ESM}.csv`: the forcing-history sweep, headline PullbackDMDc only (column `history`, months).
 
 Figures go to `evaluation_results/param_sensitivity/`:
-- **`pullback_rmsd.{pdf,png}`:** PullbackDMDc only. The columns are N (relative to the main value), lag and domain, with one line per variable or index.
+- **`pullback_rmsd.{pdf,png}`:** PullbackDMDc only, for SAT GM, OSAT GM and SLP south of 65°S. Panels (a)–(d) are N (relative to the main value), lag, domain and forcing history. Each member's RMSD at a setting minus its RMSD at the main setting (ΔRMSD, percentage points of the truth std). Median and IQR, with each ESM weighted equally (50/65/50/50 members).
+- **`pullback_drmsd_quantiles.csv`:** the quartiles behind `pullback_rmsd`.
 - **`methods_rmsd.{pdf,png}`:** all methods. The rows are SAT, OSAT, SLP S of 65°S and SLP N of 65°N; the columns are N, lag and domain. The domain column has only the OSAT row.
-- **`rmsd_quantiles.csv`:** the quartiles behind both figures.
+- **`rmsd_quantiles.csv`:** the pooled quartiles of absolute RMSD behind `methods_rmsd`.
 
 ## Running (slurm, from the repo root)
 ```bash
 sbatch param_sensitivity/psl_eofs_n400.sbatch            # ~1 h, ~8 GB
-sbatch --array=0-11%4 param_sensitivity/sweep.sbatch     # 3 vars x 4 ESMs, ~2-3 h at 4 tasks at once
+sbatch --array=0-11%4 param_sensitivity/sweep.sbatch     # 3 vars x 4 ESMs, < 1 min per task
+sbatch --array=0-11%4 param_sensitivity/history.sbatch   # same array, forcing-history sweep, < 1 min per task
 sbatch param_sensitivity/plot.sbatch                      # < 1 min
 ```
 
