@@ -17,7 +17,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from evaluation.utils.metrics import coord_to_dtindex, global_mean_flat, lat_flat_from_pars, regional_mean
 from evaluation.utils.style import display_model_name
-from utils.data_utils import load_data, load_truth, undo_lat_scaling
+from utils.data_utils import load_truth, undo_lat_scaling
 from utils.params import (artifact_root, base_path, pdf_root, predictions_dir, requested_lags,
                           requested_year_ranges, run_suffixes)
 
@@ -149,15 +149,6 @@ def member_files(var, model):
     input_dir = os.path.join(base_path, 'ensembles', var, model)
     files = [f for f in sorted(os.listdir(input_dir)) if 'historical' in f and (model != 'CESM2' or '_cmip6' in f)]
     return [os.path.join(input_dir, f) for f in files]
-
-
-def member_contrast(path, var):
-    """DJF - JJA of one ESM member, in the data's units."""
-    data, pars = load_data(path, var)
-    grid = np.full((pars['t'], pars['nlat'], pars['nlon']), np.nan)
-    grid[:, ~pars['nan_mask']] = data
-    years, X = by_month(unscale(grid, pars['lat'].values), coord_to_dtindex(pars['time']))
-    return years, contrast(X)
 
 
 def modes34(var, region, method, dmd, pars, time_index):
@@ -342,8 +333,8 @@ def plot_drift(panel, year_suffix, run_suffix):
     return fig, row, levels, trends
 
 
-def plot_esm_members(year_suffix, levels):
-    """DJF - JJA trend maps of 20CRv3 and, per ESM, of the member with the highest pattern r against it."""
+def plot_esm_ensmean(year_suffix, levels):
+    """DJF - JJA trend maps of 20CRv3 and of each ESM's ensemble mean."""
     plt.rcParams['hatch.linewidth'] = 0.3
     fig = plt.figure(figsize=(16, 13), layout='constrained')
     gs = fig.add_gridspec(4, 3)
@@ -357,24 +348,20 @@ def plot_esm_members(year_suffix, levels):
         ax.set_title(f'{obs}\nbox {box_stats(lat, lon, map_obs, stip_obs, box)[0]:.3g} {units[var]}/century',
                      fontsize=10)
         for j, model in enumerate(esms, start=1):
-            best = None
-            for path in member_files(var, model):
-                years, C = member_contrast(path, var)
-                trend = ols_trend(years, C)[0]
-                r = pattern_corr(map_obs, trend, lat)
-                if best is None or r > best[0]:
-                    best = (r, trend, C, years)
-            r, trend, C, years = best
+            lat_e, lon_e, trend, _ = obs_contrast_trend_map(var, year_suffix, model)
+            assert np.allclose(lat_e, lat) and np.allclose(lon_e, lon), f'{var} {model}: grid differs from {obs}'
+            r = pattern_corr(map_obs, trend, lat)
             ax = fig.add_subplot(gs[2 * i + j // 3, j % 3], projection=proj)
-            draw_map(ax, lat, lon, trend, levels[var], region, block_bootstrap_significance(years, C, trend))
-            ax.set_title(f'{display_model_name(model)}\nr = {r:.2f}, box '
-                         f'{box_stats(lat, lon, trend, no_stip, box)[0]:.3g} {units[var]}/century', fontsize=10)
-            print(f'{var} {model}: best member r {r:.2f}', flush=True)
+            draw_map(ax, lat, lon, trend, levels[var], region)
+            ax.set_title(f'{display_model_name(model)} ensemble mean (n = {len(member_files(var, model))})\n'
+                         f'r = {r:.2f}, box {box_stats(lat, lon, trend, no_stip, box)[0]:.3g} {units[var]}/century',
+                         fontsize=10)
+            print(f'{var} {model}: ensemble-mean r {r:.2f}', flush=True)
         ax = fig.add_subplot(gs[2 * i + 1, 2])
         ax.axis('off')
         cbar = fig.colorbar(m, cax=ax.inset_axes([0.05, 0.55, 0.9, 0.08]), orientation='horizontal', format='%g')
         cbar.set_label(f'{var_names[var]} DJF − JJA trend ({units[var]}/century)', fontsize=10)
-        ax.text(0.5, 0.3, f'ESMs: member with highest pattern r vs {obs}\nstippling: significant at {level}%',
+        ax.text(0.5, 0.3, f'ESMs: ensemble mean\nstippling ({obs} only): significant at {level}%',
                 transform=ax.transAxes, ha='center', va='top', fontsize=9)
     return fig
 
@@ -400,8 +387,8 @@ if __name__ == '__main__':
             pd.DataFrame(summary).to_csv(os.path.join(out_dir, f'seasonal_cycle_drift_{obs}_summary.csv'),
                                          index=False)
 
-            fig = plot_esm_members(year_suffix, levels)
-            out_fig = os.path.join(out_dir, 'seasonal_cycle_drift_esm_members.pdf')
+            fig = plot_esm_ensmean(year_suffix, levels)
+            out_fig = os.path.join(out_dir, 'seasonal_cycle_drift_esm_ensmean.pdf')
             fig.savefig(out_fig, dpi=300, bbox_inches='tight')
             plt.close(fig)
             print(f'Saved: {out_fig}', flush=True)
