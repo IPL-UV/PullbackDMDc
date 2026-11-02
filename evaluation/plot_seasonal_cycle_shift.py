@@ -203,6 +203,25 @@ def draw_deviation(ax, years, dev):
     return smoothed
 
 
+def draw_monthly_trends(ax, trends, r, unit):
+    """OLS trend of each calendar month; DJF and JJA months are shaded as in the DJF - JJA maps."""
+    for season in ['DJF', 'JJA']:
+        for month in season_months[season]:
+            ax.axvspan(month + 0.5, month + 1.5, color=season_hues[season], alpha=0.12, linewidth=0)
+    months = np.arange(1, 13)
+    style = dict(marker='o', markersize=3.5, linewidth=1.5, zorder=3)
+    ax.plot(months, trends['internal'], color='black', label=f'{obs} internal', **style)
+    ax.plot(months, trends['modes34'], color='#E69F00', label='modes 3–4', **style)
+    ax.axhline(0, color='0.5', linewidth=0.6)
+    ax.set_xticks(months, list('JFMAMJJASOND'))
+    ax.set_xlim(0.5, 12.5)
+    ax.set_ylabel(f'trend ({unit}/century)', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=8, loc='best', framealpha=0.85)
+    ax.set_title(f'Trend by calendar month (r = {r:.2f})', fontsize=12)
+
+
 def annotate_r(ax, r):
     parts = [TextArea('r', textprops=dict(fontsize=9))]
     parts += [TextArea(f'{s} {v:.2f}', textprops=dict(color=season_hues[s], fontsize=9, fontweight='bold'))
@@ -250,17 +269,21 @@ def draw_map(ax, lat, lon, field, levels, region, stipple=None):
 def plot_drift(panel, year_suffix, run_suffix):
     label, var, region, method = panel
     plt.rcParams['hatch.linewidth'] = 0.3
-    fig = plt.figure(figsize=(12, 6.75), layout='constrained')
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1.2])
+    fig = plt.figure(figsize=(14.5, 6.75), layout='constrained')
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1.2])
+    gs_top, gs_maps = gs[0].subgridspec(1, 3, width_ratios=[1, 1, 0.7]), gs[1].subgridspec(1, 2)
     dmd, pars = load_fit(var, method, year_suffix, run_suffix)
     time_index, comps = components(var, region, dmd, pars, year_suffix)
     series, lat_m, lon_m, map_modes, freq = modes34(var, region, method, dmd, pars, time_index)
     assert series.shape == comps['raw'].shape
     comps['modes34'] = series
     by = {key: by_month(x, time_index) for key, x in comps.items()}
+    trends = {key: ols_trend(*by[key])[0] for key in ['forced', 'internal', 'modes34']}
+    a = trends['internal'] - trends['internal'].mean()
+    b = trends['modes34'] - trends['modes34'].mean()
 
-    ax_obs = fig.add_subplot(gs[0, 0])
-    ax_mod = fig.add_subplot(gs[0, 1], sharex=ax_obs, sharey=ax_obs)
+    ax_obs = fig.add_subplot(gs_top[0])
+    ax_mod = fig.add_subplot(gs_top[1], sharex=ax_obs, sharey=ax_obs)
     dev_obs, dev_mod = seasonal_deviation(by['raw'][1]), seasonal_deviation(by['modes34'][1])
     sm_obs = draw_deviation(ax_obs, by['raw'][0], dev_obs)
     sm_mod = draw_deviation(ax_mod, by['modes34'][0], dev_mod)
@@ -273,6 +296,7 @@ def plot_drift(panel, year_suffix, run_suffix):
                       fontsize=10)
     ax_obs.set_title(obs, fontsize=12)
     ax_mod.set_title('PullbackDMDc internal, modes 3–4', fontsize=12)
+    draw_monthly_trends(fig.add_subplot(gs_top[2]), trends, np.corrcoef(a, b)[0, 1], units[var])
 
     lat_o, lon_o, map_obs, stip_obs = obs_contrast_trend_map(var, year_suffix, obs)
     assert np.allclose(lat_o, lat_m) and np.allclose(lon_o, lon_m), f'{var}: means and EOF grids differ'
@@ -282,7 +306,7 @@ def plot_drift(panel, year_suffix, run_suffix):
     step = mag * min(s for s in (1, 2, 5, 10) if s * mag >= step)
     levels = step * np.arange(-5, 6)
     proj = ccrs.PlateCarree(central_longitude=180)
-    map_axes = [fig.add_subplot(gs[1, j], projection=proj) for j in range(2)]
+    map_axes = [fig.add_subplot(gs_maps[j], projection=proj) for j in range(2)]
     m = draw_map(map_axes[0], lat_o, lon_o, map_obs, levels, region, stip_obs)
     draw_map(map_axes[1], lat_m, lon_m, map_modes, levels, region)
     r_pattern = pattern_corr(map_obs, map_modes, lat_o)
@@ -296,9 +320,6 @@ def plot_drift(panel, year_suffix, run_suffix):
                    f'({units[var]}/century); stippling: |{obs} trend| exceeds {level}% of {n_boot} block-bootstrap ({block_years}-yr) null trends',
                    fontsize=9)
 
-    trends = {key: ols_trend(*by[key])[0] for key in ['forced', 'internal', 'modes34']}
-    a = trends['internal'] - trends['internal'].mean()
-    b = trends['modes34'] - trends['modes34'].mean()
     row = {'index': label, 'method': method, 'trend_profile_corr': np.corrcoef(a, b)[0, 1],
            'trend_profile_regression_slope': (a @ b) / (a @ a), 'forced_trend_spread': np.ptp(trends['forced']),
            'pattern_r': r_pattern, 'pattern_slope': pattern_slope(map_obs, map_modes, lat_o),
@@ -318,7 +339,7 @@ def plot_drift(panel, year_suffix, run_suffix):
     handles = [mlines.Line2D([], [], color=c, linewidth=2.0, label=s) for s, c in season_hues.items()]
     fig.legend(handles=handles, loc='upper center', ncol=4, fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.0),
                title='Season', title_fontsize=9)
-    return fig, row, levels
+    return fig, row, levels, trends
 
 
 def plot_esm_members(year_suffix, levels):
@@ -367,8 +388,11 @@ if __name__ == '__main__':
 
             summary, levels = [], {}
             for panel in panels:
-                fig, row, levels[panel[1]] = plot_drift(panel, year_suffix, run_suffix)
+                fig, row, levels[panel[1]], trends = plot_drift(panel, year_suffix, run_suffix)
                 summary.append(row)
+                # trends per century in the data's units (K or Pa), month 1 = January
+                pd.DataFrame({'month': np.arange(1, 13), **trends}).to_csv(
+                    os.path.join(out_dir, f'seasonal_cycle_drift_{obs}_{panel[1]}_monthly_trends.csv'), index=False)
                 out_fig = os.path.join(out_dir, f'seasonal_cycle_drift_{obs}_{panel[1]}.pdf')
                 fig.savefig(out_fig, dpi=300, bbox_inches='tight')
                 plt.close(fig)
