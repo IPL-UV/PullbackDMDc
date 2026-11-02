@@ -31,6 +31,7 @@ PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.plot_trend_maps
 
 python -m evaluation.plot_gm_timeseries
 python -m evaluation.plot_seasonal_cycle_shift
+python -m evaluation.plot_gm_20crv3
 python -m evaluation.plot_modes
 python -m evaluation.plot_eigenvalue_scatter
 python -m evaluation.plot_decay_frequency

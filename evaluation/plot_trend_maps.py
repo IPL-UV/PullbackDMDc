@@ -1,7 +1,7 @@
 """R2-M2 (ii): plot the trend maps written by compute_trend_maps.py.
 
 Rows = datasets (4 ESMs + 20CRv3), columns = truth then each method's member-mean trend. One shared
-symmetric colorbar per figure. ESM estimate panels show the pooled pattern correlation r and normalised
+symmetric colorbar per figure. ESM estimate panels show the pooled uncentered correlation r and normalised
 RMSE over all members (the 'total' of the Taylor diagrams).
 Run: PBDMDC_LAGS=3 PBDMDC_YEAR_RANGES=1850-2014 PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.plot_trend_maps
 """
