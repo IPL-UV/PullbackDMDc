@@ -5,8 +5,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from evaluation.utils.style import (CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, METHOD_NAMES_ON_FIG,
-                                   display_model_name)
+                                   display_model_name, set_font_sizes)
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~15.5 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 17, 20, 22, 24
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 def display_method_name(method_name):
@@ -198,7 +202,7 @@ def plot_decay_with_acf_row(data_by_var, acf_coverage_by_var, clim_vars, n_modes
 	fig, axes = plt.subplots(
 		2,
 		len(clim_vars),
-		figsize=(5.2 * len(clim_vars), 8.2),
+		figsize=(max(5.2 * len(clim_vars), 7.5), 8.2),
 		sharex="col",
 		constrained_layout=True,
 	)
@@ -279,7 +283,7 @@ def plot_decay_with_acf_row(data_by_var, acf_coverage_by_var, clim_vars, n_modes
 		bottom_ax.axvline(4.5, color="red", linestyle="--", linewidth=1.6, alpha=0.9, zorder=4)
 		top_ax.set_title(
 			f"{CLIM_VARS_ON_FIG.get(clim_var, clim_var)} | {display_method_name(method)} ",
-			fontsize=12,
+			fontsize=FS_TITLE,
 		)
 		# top_ax.set_yscale("log")
 		top_ax.grid(True, which="major", alpha=0.3)
@@ -289,10 +293,10 @@ def plot_decay_with_acf_row(data_by_var, acf_coverage_by_var, clim_vars, n_modes
 		bottom_ax.set_yticks([0, 20, 40, 60, 80, 100])
 		bottom_ax.grid(True, which="major", alpha=0.3)
 		bottom_ax.grid(True, which="minor", alpha=0.14)
-		bottom_ax.set_xlabel("Mode (sorted by |lambda|)", fontsize=10)
+		bottom_ax.set_xlabel("Mode (sorted by |lambda|)", fontsize=FS_LABEL)
 
-	axes[0, 0].set_ylabel("Decay Time (years)", fontsize=11)
-	axes[1, 0].set_ylabel("ACF Points Within 95% CI (%)\n(first 40 years)", fontsize=11)
+	axes[0, 0].set_ylabel("Decay Time (years)", fontsize=FS_LABEL)
+	axes[1, 0].set_ylabel("ACF Points Within 95% CI (%)\n(first 40 years)", fontsize=FS_LABEL)
 
 	handles, labels = axes[0, 0].get_legend_handles_labels()
 	if handles:
@@ -301,13 +305,13 @@ def plot_decay_with_acf_row(data_by_var, acf_coverage_by_var, clim_vars, n_modes
 		fig.legend(
 			[h for h, _ in unique],
 			[l for _, l in unique],
-			loc="lower center",
-			ncol=len(unique),
+			loc="upper center",
+			ncol=min(len(unique), 3),
 			frameon=True,
 			edgecolor="#9e9e9e",
 			framealpha=1.0,
-			bbox_to_anchor=(0.5, -0.03),
-			fontsize=9,
+			bbox_to_anchor=(0.5, 0.0),
+			fontsize=FS_TICK,
 		)
 
 	return fig
@@ -319,7 +323,7 @@ def main():
 	acf_stat_years = 40
 
 	lag_suffix, year_suffix = build_suffixes(lag, start_year, end_year)
-	clim_vars = ["tas", "psl", "tas_ocean"]
+	clim_vars = ["tas_ocean"]
 	sample_size = (end_year - start_year + 1) * 12 - lag
 	if sample_size <= 1:
 		raise ValueError(f"Invalid sample size for ACF confidence bands: {sample_size}")

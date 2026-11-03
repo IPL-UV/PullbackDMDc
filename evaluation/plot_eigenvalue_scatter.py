@@ -14,7 +14,11 @@ from utils.params import pdf_root, predictions_dir
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 from evaluation.utils.members import SELECTED_MEMBERS
-from evaluation.utils.style import display_model_name
+from evaluation.utils.style import display_model_name, set_font_sizes
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~9.7 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 11, 12, 14, 15
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 # Helper functions from eigs_vis.py
 def compute_yearly_decay_time(lambdas, tau):
@@ -228,7 +232,7 @@ if __name__ == "__main__":
         ax.set_aspect('equal')
         ax.set_xlim(0, max_abs)
         ax.set_ylim(-0.5, 0.5)
-        ax.set_title(display_model_name(model), fontsize=10, pad=4)
+        ax.set_title(display_model_name(model), fontsize=FS_TITLE, pad=4)
         ax.set_xlabel('Real')
         if j == 0:
             ax.set_ylabel('Imag')

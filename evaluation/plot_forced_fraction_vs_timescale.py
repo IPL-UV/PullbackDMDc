@@ -4,8 +4,12 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
-from evaluation.utils.style import ESM_COLORS, TIMESCALE_BANDS, display_model_name
+from evaluation.utils.style import ESM_COLORS, TIMESCALE_BANDS, display_model_name, set_font_sizes
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 def first_zero_crossing_time(acf_values, dt):
@@ -133,15 +137,14 @@ def plot_forced_fraction_vs_timescale(
 
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, which='both', alpha=0.25)
-        ax.set_title(f'Mode {mode_idx + 1}', fontsize=13)
-        ax.set_xlabel('Forced Fraction', fontsize=10)
+        ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
+        ax.set_xlabel('Forced Fraction', fontsize=FS_LABEL)
         if mode_idx == 0:
-            ax.set_ylabel('Time Scale (years)', fontsize=12)
+            ax.set_ylabel('Time Scale (years)', fontsize=FS_LABEL)
 
-    axes[0].legend(handles=legend_handles, fontsize=8, loc='upper left',
-                   framealpha=0.7, title='Model', title_fontsize=8)
+    axes[0].legend(handles=legend_handles, fontsize=FS_TICK, loc='upper left',
+                   framealpha=0.7, title='Model', title_fontsize=FS_TICK)
 
-    fig.suptitle('OSAT: Forced Fraction vs. Time Scale', fontsize=16)
 
     out_path = os.path.join(
         results_dir,

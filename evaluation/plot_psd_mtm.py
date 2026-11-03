@@ -6,8 +6,12 @@ import numpy as np
 from scipy.signal.windows import dpss
 
 from evaluation.utils.members import SELECTED_MEMBERS
-from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, display_model_name
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, display_model_name, set_font_sizes
 from utils.params import esms, pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~17.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 20, 23, 25, 28
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 def parse_ensemble_member_from_filename(f_name, esm_name):
@@ -193,7 +197,7 @@ def main():
                 label_f = np.sqrt(band_cfg['flim'][0] * band_cfg['flim'][1])
                 ax.text(
                     label_f, 0.97, band_name,
-                    ha='center', va='top', fontsize=12,
+                    ha='center', va='top', fontsize=FS_TICK,
                     color=band_cfg['color'],
                     transform=ax.get_xaxis_transform(),
                 )
@@ -215,23 +219,23 @@ def main():
 
             ax.set_xscale('log')
             ax.set_yscale('log')
-            ax.set_title(f'Mode {mode_idx + 1}', fontsize=17)
-            ax.set_xlabel('Frequency (cycles / year)', fontsize=15)
+            ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
+            ax.set_xlabel('Frequency (cycles / year)', fontsize=FS_LABEL)
             ax.grid(True, which='both', alpha=0.2)
-            ax.tick_params(labelsize=14)
+            ax.tick_params(labelsize=FS_TICK)
 
             # secondary x-axis: period in years
             ax2 = ax.secondary_xaxis(
                 'top',
                 functions=(lambda f: 1.0 / f, lambda p: 1.0 / p),
             )
-            ax2.set_xlabel('Period (years)', fontsize=14)
-            ax2.tick_params(labelsize=13)
+            ax2.set_xlabel('Period (years)', fontsize=FS_LABEL)
+            ax2.tick_params(labelsize=FS_TICK)
 
             if mode_idx == 0:
                 # PCs carry the field's units (sqrt(cos lat)-weighted anomalies on unit-norm EOFs).
                 field_unit = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'Pa'}[clim_var]
-                ax.set_ylabel(f'PSD  [{field_unit}$^2$ / (cy yr$^{{-1}}$)]', fontsize=15)
+                ax.set_ylabel(f'PSD  [{field_unit}$^2$ / (cy yr$^{{-1}}$)]', fontsize=FS_LABEL)
 
         # shared legend placed below the figure
         legend_handles = [
@@ -245,22 +249,17 @@ def main():
             handles=legend_handles,
             loc='lower center',
             ncol=len(esms),
-            fontsize=14,
+            fontsize=FS_TICK,
             framealpha=0.9,
             bbox_to_anchor=(0.5, -0.14),
         )
 
-        # resolution annotation in figure title
+        # MTM resolution, for the caption
         T_years  = (end_year - start_year + 1)
         res_cyyr = 2 * NW / T_years
         res_yr   = 1.0 / res_cyyr
-
-        fig.suptitle(
-            (f'{CLIM_VARS_ON_FIG[clim_var]}: Power spectral density  -  '
-             f'Multitaper MTM, NW={NW}, K={2*NW-1} tapers  -  '
-             f'resolution {res_cyyr:.3f} cy/yr  ({res_yr:.0f} yr period)'),
-            fontsize=17,
-        )
+        print(f'{CLIM_VARS_ON_FIG[clim_var]}: multitaper MTM, NW={NW}, K={2*NW-1} tapers, '
+              f'resolution {res_cyyr:.3f} cy/yr ({res_yr:.0f} yr period)', flush=True)
 
         out_path = os.path.join(results_dir, f'psd_mtm_{clim_var}_{chosen_method}.pdf')
         fig.savefig(out_path, dpi=300, bbox_inches='tight')

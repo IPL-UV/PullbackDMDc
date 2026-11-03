@@ -6,8 +6,12 @@ import cartopy.crs as ccrs
 import xarray as xr
 
 from utils.data_utils import undo_lat_scaling, load_forcings
-from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
+from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
 from utils.params import pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~7.1 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 8, 9, 10, 11
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 def mean_pattern(patterns):
@@ -113,8 +117,8 @@ if __name__ == '__main__':
         row_limits[row_label] = (-vmax, vmax)
     n_rows = len(row_labels)
     n_cols = len(models)
-    title_fontsize = 10
-    axis_label_fontsize = 10
+    title_fontsize = FS_TITLE
+    axis_label_fontsize = FS_LABEL
 
     projection = ccrs.PlateCarree(central_longitude=180)
     fig, axes = plt.subplots(
@@ -188,12 +192,8 @@ if __name__ == '__main__':
             format='%.2f',
             aspect=30,
         )
-        cbar.set_label(cbar_labels[row_label], fontsize=8)
+        cbar.set_label(cbar_labels[row_label], fontsize=FS_LABEL)
 
-    fig.suptitle(
-        f"{CLIM_VARS_ON_FIG[clim_var]} B patterns: {METHOD_NAMES_ON_FIG['LR']} vs {METHOD_NAMES_ON_FIG['PullbackDMDc']}",
-        fontsize=title_fontsize,
-    )
     out_file = os.path.join(out_dir, f'B_vis_small_{clim_var}.pdf')
     fig.savefig(out_file, bbox_inches='tight')
     plt.close(fig)

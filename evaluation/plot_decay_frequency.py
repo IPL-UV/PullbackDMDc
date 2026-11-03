@@ -4,8 +4,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from evaluation.utils.members import SELECTED_HANDLE, mark_selected, selected_index
-from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
+from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
 from utils.params import esms, colors, method_markers, pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 def compute_yearly_decay_time(lambdas, tau):
@@ -96,7 +100,7 @@ def load_eig_data(clim_var, methods, top_n, base_pred_dir):
     return data
 
 
-def plot_combined_transposed(data, methods, model_order, top_n, title):
+def plot_combined_transposed(data, methods, model_order, top_n):
     """Row 1=decay time, row 2=frequency; cols=modes; y-axis=models, x-axis=metric value."""
     metrics = [
         ('decay', 'Decay Time (years)', 'log'),
@@ -121,7 +125,6 @@ def plot_combined_transposed(data, methods, model_order, top_n, title):
         constrained_layout=True,
         squeeze=False,
     )
-    fig.suptitle(title, fontsize=14)
 
     for row_idx, (metric_key, row_label, xscale) in enumerate(metrics):
         for mode_idx in range(top_n):
@@ -169,15 +172,15 @@ def plot_combined_transposed(data, methods, model_order, top_n, title):
                 ax.set_xscale('log')
 
             ax.set_yticks(positions)
-            ax.set_yticklabels(tick_labels, fontsize=9)
+            ax.set_yticklabels(tick_labels, fontsize=FS_TICK)
             ax.grid(True, axis='x', which='major', alpha=0.3)
             ax.grid(True, axis='x', which='minor', alpha=0.15)
 
             if row_idx == 0:
-                ax.set_title(f'Mode {mode_idx + 1}', fontsize=12)
+                ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
 
             if mode_idx == 0:
-                ax.set_ylabel(row_label, fontsize=11)
+                ax.set_ylabel(row_label, fontsize=FS_LABEL)
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     seen = set()
@@ -194,8 +197,8 @@ def plot_combined_transposed(data, methods, model_order, top_n, title):
         framealpha=1.0,
         bbox_to_anchor=(0.5, -0.12),
         markerscale=3,
-        fontsize=10,
-        title_fontsize=11,
+        fontsize=FS_TICK,
+        title_fontsize=FS_TICK,
     )
 
     return fig
@@ -238,13 +241,11 @@ if __name__ == '__main__':
     for clim_var in clim_vars:
         clim_var = [clim_var]
         clim_var_suffix = '_'.join(clim_var)
-        title = f'Decay Time & Frequency – {" ".join(CLIM_VARS_ON_FIG.get(cv, cv) for cv in clim_var)}'
         fig = plot_combined_transposed(
             data=data_by_var[clim_var[0]],
             methods=methods,
             model_order=model_order,
             top_n=top_n,
-            title=title,
         )
         out_fig = os.path.join(results_dir, f'decay_frequency_top{top_n}_{clim_var_suffix}.pdf')
         fig.savefig(out_fig, dpi=300, bbox_inches='tight')

@@ -5,8 +5,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from evaluation.utils.members import SELECTED_HANDLE, acf_selected_index, mark_selected
-from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS, set_font_sizes
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 def build_suffixes(lag, start_year, end_year):
@@ -159,7 +163,7 @@ def plot_mode_timescale_scatter_grid(
                         mark_selected(ax, sel_value, pos, 0.15)
 
             if row_idx == 0:
-                ax.set_title(f'Mode {mode_idx + 1}', fontsize=13)
+                ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
 
             ax.set_yticks(positions)
             ax.set_yticklabels(model_tick_labels)
@@ -176,19 +180,18 @@ def plot_mode_timescale_scatter_grid(
                         band_name,
                         ha='center',
                         va='bottom',
-                        fontsize=9,
+                        fontsize=FS_TICK,
                         color=band_cfg['color'],
                         transform=ax.get_xaxis_transform(),
                     )
 
-        axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=12)
+        axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=FS_LABEL)
 
     for ax in axes[-1, :]:
-        ax.set_xlabel('Years', fontsize=12)
+        ax.set_xlabel('Years', fontsize=FS_LABEL)
 
-    fig.suptitle('Dominant time scale', fontsize=18)
-    fig.legend(handles=[SELECTED_HANDLE], loc='lower center', bbox_to_anchor=(0.5, -0.04), frameon=False,
-               fontsize=11)
+    fig.legend(handles=[SELECTED_HANDLE], loc='upper center', bbox_to_anchor=(0.5, 0.0), frameon=False,
+               fontsize=FS_TICK)
     return fig
 
 

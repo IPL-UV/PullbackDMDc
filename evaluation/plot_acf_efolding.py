@@ -8,9 +8,13 @@ import numpy as np
 import pandas as pd
 
 from evaluation.utils.members import acf_selected_index, mark_selected, method_files, selected_index
-from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS
+from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS, set_font_sizes
 from evaluation.utils.timescales import efolding_time, zero_crossing_time, eig_decay_time_years
 from utils.params import artifact_root, esms, pdf_root, predictions_dir, requested_clim_vars
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~9.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 11, 13, 14, 16
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 # (key, legend label, scatter style, vertical offset within a dataset row)
@@ -19,9 +23,6 @@ QUANTITIES = [
     ('zero4', '4 × first ACF zero crossing', dict(marker='s', facecolors='none'), 0.0),
     ('eigdecay', 'DMD decay time', dict(marker='x'), -0.25),
 ]
-
-# Text sized for a one-row figure printed at text width.
-FONTSIZE = 11
 
 
 def chosen_method_for(clim_var):
@@ -105,14 +106,14 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
                             mark_selected(ax, sel_value, pos + offset, 0.1)
 
             if row_idx == 0:
-                ax.set_title(f'Mode {mode_idx + 1}', fontsize=13)
+                ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
 
             ax.set_yticks(positions)
             ax.set_yticklabels(model_tick_labels)
             # Extra headroom above the top dataset keeps the band labels clear of the data.
             ax.set_ylim(positions[0] - 0.5, positions[-1] + 0.9)
             ax.set_xscale('log')
-            ax.tick_params(labelsize=FONTSIZE)
+            ax.tick_params(labelsize=FS_TICK)
             ax.grid(True, axis='x', which='major', alpha=0.3)
             ax.grid(True, axis='x', which='minor', alpha=0.15)
             for pos in positions:
@@ -122,20 +123,20 @@ def plot_timescale_grid(timescales_by_var, clim_vars, top_n, timescale_bands, es
             if row_idx == 0 and mode_idx == 0:
                 for band_name, band_cfg in timescale_bands.items():
                     ax.text(np.sqrt(band_cfg['xlim'][0] * band_cfg['xlim'][1]), 0.98, band_name,
-                            ha='center', va='top', fontsize=FONTSIZE, color=band_cfg['color'],
+                            ha='center', va='top', fontsize=FS_TICK, color=band_cfg['color'],
                             transform=ax.get_xaxis_transform())
 
-        axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=12)
+        axes[row_idx, 0].set_ylabel(CLIM_VARS_ON_FIG[clim_var], fontsize=FS_LABEL)
 
     for ax in axes[-1, :]:
-        ax.set_xlabel('Timescale (years)', fontsize=12)
+        ax.set_xlabel('Timescale (years)', fontsize=FS_LABEL)
 
     legend_handles = [
         Line2D([0], [0], linestyle='None', color='black', markerfacecolor='none' if style.get('facecolors') == 'none' else 'black',
                marker=style['marker'], markersize=6, label=label)
         for _, label, style, _ in QUANTITIES
     ]
-    fig.legend(handles=legend_handles, loc='lower center', ncol=len(legend_handles), fontsize=FONTSIZE,
+    fig.legend(handles=legend_handles, loc='lower center', ncol=len(legend_handles), fontsize=FS_TICK,
                bbox_to_anchor=(0.5, -0.1), frameon=False)
     return fig
 
