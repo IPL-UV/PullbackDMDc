@@ -744,7 +744,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
     )
     # Minimize the vertical gap so first two rows visually stack as a shared-x pair.
     fig.tight_layout(h_pad=0.0)
-    fig.subplots_adjust(hspace=0.0, wspace=0.10)
+    fig.subplots_adjust(hspace=0.0, wspace=0.20)
     fig.align_ylabels(axes[:, 0])
 
     return fig, axes, ci_rows
