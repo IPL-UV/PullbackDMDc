@@ -1,13 +1,17 @@
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import os
 import json
 from evaluation.utils.metrics import add_one_custom_plot, compute_taylor_std_range
-from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
+from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
 from evaluation.utils.trends import parse_window, window_label
 from utils.params import artifact_root, colors, method_names, esms, year_ranges, lags, method_markers, pdf_root, requested_lags, requested_year_ranges
 from utils.params import requested_clim_vars
+
+# Prints at ~7/8/9/10 pt when included at 0.49 \textwidth (figure saves ~6.8 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 16, 18, 19, 21
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 esms=esms[1:] # Exclude obs for this figure
 esms = ['CESM2', 'MPI-ESM1-2-LR', 'CanESM5', 'MIROC6']
 
@@ -101,6 +105,7 @@ def _pick_contour_label_positions(contour_set, levels, avoid_points, xlim, ylim)
     }
     x_span = max(1e-9, xlim[1] - xlim[0])
     y_span = max(1e-9, ylim[1] - ylim[0])
+    outer_radius = max(xlim[1], ylim[1])  # radius of the outer arc that carries the correlation labels
 
     positions = []
     for level in levels:
@@ -119,12 +124,14 @@ def _pick_contour_label_positions(contour_set, levels, avoid_points, xlim, ylim)
             stride = max(1, len(seg) // 80)
             for x, y in seg[::stride]:
                 # Keep labels inside safe interior and below title region.
-                if not (xlim[0] + 0.12 * x_span <= x <= xlim[1] - 0.14 * x_span):
+                if not (xlim[0] + 0.12 * x_span <= x <= xlim[1] - 0.22 * x_span):
                     continue
-                if not (ylim[0] + 0.10 * y_span <= y <= ylim[1] - 0.24 * y_span):
+                if not (ylim[0] + 0.10 * y_span <= y <= ylim[1] - 0.30 * y_span):
                     continue
                 # Avoid the upper-right arc area where correlation tick labels are drawn.
                 if x >= xlim[0] + 0.70 * x_span and y >= ylim[0] + 0.56 * y_span:
+                    continue
+                if np.hypot(x, y) > 0.85 * outer_radius:  # near the outer arc and its labels
                     continue
 
                 if has_avoid_points:
@@ -141,29 +148,38 @@ def _pick_contour_label_positions(contour_set, levels, avoid_points, xlim, ylim)
         if best_pos is not None:
             positions.append(best_pos)
 
-    return positions if positions else None
+    return positions  # empty: no safe spot, leave the contours unlabelled rather than auto-placing
+
+
+def _std_tick_label(v, _):
+    """y tick label of the top diagram: blank at 0, where the x axis already shows it; else 0.2, 1.0, 1.25."""
+    if abs(v) < 1e-9:
+        return ''
+    label = f'{v:.2f}'
+    return label[:-1] if label.endswith('0') else label
 
 
 def _tightened_contour_levels(contour_set):
-    """Drop edge-most contour levels so labels do not get clipped."""
+    """Drop edge-most contour levels so labels do not get clipped; label every other level so they fit."""
     levels = list(contour_set.levels)
-    if len(levels) <= 4:
-        return levels
-    return levels[1:-1]
+    if len(levels) > 4:
+        levels = levels[1:-1]
+    return levels[::2]
 
 
 if __name__ == '__main__':
 
     default_std_model = 'MPI-ESM1-2-LR'
     mode_config = get_mode_config(taylor_plot_mode)
-    top_corr_label_fontsize = 14
-    crop_corr_label_fontsize = 11
+    top_corr_label_fontsize = FS_TICK
+    crop_corr_label_fontsize = FS_TICK
+    crop_corr_labels = np.array([0, 0.2, 0.4, 0.6, 0.8, 0.9])  # sparser arc labels for the zoomed panels
     top_corr_label_pad = 0.03
     crop_corr_label_pad = 0.005
     top_title_y = 1.06
-    crop_title_y = 1.06
-    top_title_fontsize = 20
-    top_correlation_text_fontsize = 14
+    crop_title_y = 1.12
+    top_title_fontsize = FS_TITLE
+    top_correlation_text_fontsize = FS_LABEL
     top_axis_label_fontsize = top_correlation_text_fontsize
     top_panel_keep_percentile = 95.0
     model_palette = ['#7f7f7f', '#8c564b', '#2ca02c', '#0b1f5b']
@@ -282,20 +298,15 @@ if __name__ == '__main__':
                 zoom_highlight_color = '#8c6d46'
  
                 fig = plt.figure(figsize=(7, 15))
-                grid_spec = fig.add_gridspec(2, 1, height_ratios=[4.1, 4.8], hspace=0.38)
+                grid_spec = fig.add_gridspec(2, 1, height_ratios=[4.1, 4.8], hspace=0.5)
                 top_ax = fig.add_subplot(grid_spec[0, 0])
-                bottom_grid = grid_spec[1, 0].subgridspec(2, 2, hspace=0.26, wspace=0.24)
+                bottom_grid = grid_spec[1, 0].subgridspec(2, 2, hspace=0.55, wspace=0.28)
                 bottom_layout = {
                     'CESM2': fig.add_subplot(bottom_grid[0, 0]),
                     'MPI-ESM1-2-LR': fig.add_subplot(bottom_grid[0, 1]),
                     'CanESM5': fig.add_subplot(bottom_grid[1, 0]),
                     'MIROC6': fig.add_subplot(bottom_grid[1, 1]),
                 }
-                fig.suptitle(
-                    f"Forced response ({mode_config['title_mode']}): {CLIM_VARS_ON_FIG[var]}",
-                    fontsize=20,
-                    y=0.92,
-                )
 
                 top_ax = add_one_custom_plot(
                     top_td,
@@ -312,9 +323,10 @@ if __name__ == '__main__':
                 # top_ax.set_title('All ESMs', y=top_title_y, fontsize=top_title_fontsize)
                 top_ax.set_xlabel('Standard Deviation', fontsize=top_axis_label_fontsize)
                 top_ax.set_ylabel('Standard Deviation', fontsize=top_axis_label_fontsize)
+                top_ax.yaxis.set_major_formatter(FuncFormatter(_std_tick_label))
                 top_ax.text(
-                    0.74,
-                    0.78,
+                    0.87,
+                    0.87,
                     'Correlation',
                     transform=top_ax.transAxes,
                     rotation=-45,
@@ -333,17 +345,18 @@ if __name__ == '__main__':
                         top_ax.get_xlim(),
                         top_ax.get_ylim(),
                     )
-                    top_ax.clabel(
-                        top_contour_set,
-                        levels=top_levels,
-                        manual=top_manual_positions,
-                        inline=True,
-                        inline_spacing=8,
-                        fontsize=top_corr_label_fontsize,
-                        fmt='%.2f',
-                        use_clabeltext=True,
-                        rightside_up=True,
-                    )
+                    if top_manual_positions:
+                        top_ax.clabel(
+                            top_contour_set,
+                            levels=top_levels,
+                            manual=top_manual_positions,
+                            inline=True,
+                            inline_spacing=8,
+                            fontsize=top_corr_label_fontsize,
+                            fmt='%.2f',
+                            use_clabeltext=True,
+                            rightside_up=True,
+                        )
 
 
 
@@ -366,6 +379,7 @@ if __name__ == '__main__':
                         ax=ax,
                         corr_label_pad=crop_corr_label_pad,
                         corr_label_fontsize=crop_corr_label_fontsize,
+                        corr_labels=crop_corr_labels,
                     )
                     contour_set = getattr(ax, '_taylor_contours', None)
                     if contour_set is not None:
@@ -400,13 +414,16 @@ if __name__ == '__main__':
 
                     ax.set_xlim(x_min, x_max)
                     ax.set_ylim(y_min, y_max)
+                    # Keep tick labels away from the top and right edges, where the arc labels are drawn.
+                    ax.set_xticks([t for t in ax.get_xticks() if x_min <= t <= x_max - 0.12 * (x_max - x_min)])
+                    ax.set_yticks([t for t in ax.get_yticks() if y_min <= t <= y_max - 0.15 * (y_max - y_min)])
                     # Ensure correlation tick labels are recomputed for cropped views.
                     if hasattr(ax, '_taylor_plot'):
                         ax._taylor_plot._draw_corr_ticklabels()
 
                     contour_set = bottom_contours.get(model)
                     if contour_set is not None:
-                        levels = contour_set.levels
+                        levels = list(contour_set.levels)[::2]  # every other level, so labels fit
                         manual_positions = _pick_contour_label_positions(
                             contour_set,
                             levels,
@@ -414,17 +431,18 @@ if __name__ == '__main__':
                             ax.get_xlim(),
                             ax.get_ylim(),
                         )
-                        ax.clabel(
-                            contour_set,
-                            levels=levels,
-                            manual=manual_positions,
-                            inline=True,
-                            inline_spacing=8,
-                            fontsize=crop_corr_label_fontsize,
-                            fmt='%.2f',
-                            use_clabeltext=True,
-                            rightside_up=True,
-                        )
+                        if manual_positions:
+                            ax.clabel(
+                                contour_set,
+                                levels=levels,
+                                manual=manual_positions,
+                                inline=True,
+                                inline_spacing=8,
+                                fontsize=crop_corr_label_fontsize,
+                                fmt='%.2f',
+                                use_clabeltext=True,
+                                rightside_up=True,
+                            )
 
                 fig.tight_layout(rect=(0.0, 0.07, 1.0, 0.98))
 
@@ -451,85 +469,37 @@ if __name__ == '__main__':
                     for model in esms
                 ]
 
-                # Add the climate-model legend below the top all-ESMs panel.
-                model_legend_ax = fig.add_axes([0.12, 0.505, 0.76, 0.042])
-                model_legend_ax.axis('off')
-                model_legend_ax.add_patch(
-                    Rectangle(
-                        (0.0, 0.0),
-                        1.0,
-                        1.0,
-                        transform=model_legend_ax.transAxes,
-                        fill=False,
-                        edgecolor='#888888',
-                        linewidth=0.8,
-                    )
-                )
-                model_legend_ax.legend(
+                pt = 1. / 72. / fig.get_figheight()  # one point as a figure fraction
+                frame = dict(frameon=True, fancybox=False, edgecolor='#888888', framealpha=1.0, fontsize=FS_TICK,
+                             title_fontsize=FS_TICK, handletextpad=0.35, columnspacing=0.8)
+
+                # Climate-model legend below the top all-ESMs panel's tick labels and axis label.
+                model_legend = fig.legend(
                     model_handles,
                     [h.get_label() for h in model_handles],
-                    loc='center',
-                    ncol=4,
-                    frameon=False,
-                    fontsize=12,
-                    handletextpad=0.35,
-                    columnspacing=0.8,
-                    title='Climate Model',
-                    title_fontsize=12,
-                )
-
-                # Add the method legend below the 2x2 plots.
-                legend_ax = fig.add_axes([0.07, 0.020, 0.86, 0.074])
-                legend_ax.axis('off')
-                legend_ax.add_patch(
-                    Rectangle(
-                        (0.0, 0.0),
-                        1.0,
-                        1.0,
-                        transform=legend_ax.transAxes,
-                        fill=False,
-                        edgecolor='#888888',
-                        linewidth=0.8,
-                    )
-                )
-
-                baseline_methods = ['RegGMST', 'LIM', 'LIM-opt', 'LR']
-                pullback_methods = ['PullbackDMDc', 'PullbackDMDc-2d', 'PullbackDMDc-3d']
-                baseline_handles = [
-                    next(handle for handle in method_handles if handle.get_label() == METHOD_NAMES_ON_FIG[method])
-                    for method in baseline_methods
-                ]
-                pullback_handles = [
-                    next(handle for handle in method_handles if handle.get_label() == METHOD_NAMES_ON_FIG[method])
-                    for method in pullback_methods
-                ]
-
-                baseline_legend = legend_ax.legend(
-                    baseline_handles,
-                    [h.get_label() for h in baseline_handles],
                     loc='upper center',
-                    bbox_to_anchor=(0.5, 0.96),
+                    bbox_to_anchor=(0.5, top_ax.get_position().y0 - 1.8 * (FS_TICK + FS_LABEL) * pt),
                     ncol=4,
-                    frameon=False,
-                    fontsize=12,
-                    handletextpad=0.35,
-                    columnspacing=0.8,
-                    title='Method (Pooled Comparison)',
-                    title_fontsize=12,
+                    title='Climate Model',
+                    **frame,
                 )
-                legend_ax.add_artist(baseline_legend)
+                model_legend.get_frame().set_linewidth(0.8)
 
-                legend_ax.legend(
-                    pullback_handles,
-                    [h.get_label() for h in pullback_handles],
-                    loc='lower center',
-                    bbox_to_anchor=(0.5, 0.02),
-                    ncol=3,
-                    frameon=False,
-                    fontsize=12,
-                    handletextpad=0.35,
-                    columnspacing=0.8,
+                # Method legend below the 2x2 plots; rows: baselines, then PullbackDMDc variants.
+                order = ['RegGMST', 'LIM-opt', 'PullbackDMDc', 'PullbackDMDc-3d', 'LIM', 'LR', 'PullbackDMDc-2d']
+                handle_of = {h.get_label(): h for h in method_handles}
+                method_legend_handles = [handle_of[METHOD_NAMES_ON_FIG[m]] for m in order]
+                bottom_y0 = min(ax.get_position().y0 for ax in bottom_layout.values())
+                method_legend = fig.legend(
+                    method_legend_handles,
+                    [h.get_label() for h in method_legend_handles],
+                    loc='upper center',
+                    bbox_to_anchor=(0.5, bottom_y0 - 1.8 * FS_TICK * pt),
+                    ncol=2,
+                    title='Method (Pooled Comparison)',
+                    **frame,
                 )
+                method_legend.get_frame().set_linewidth(0.8)
 
                 out_fig = os.path.join(pdf_results_dir, f"{mode_config['output_prefix']}_{var}.pdf")
                 plt.savefig(out_fig, bbox_inches='tight')

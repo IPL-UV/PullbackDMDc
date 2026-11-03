@@ -1,0 +1,5 @@
+model,n_members,mode1,mode2,mode3,mode4,any_mode_1_2,any_mode_1_4
+CESM2,50,0,0,2,0,0,2
+MPI-ESM1-2-LR,50,2,3,1,2,3,5
+CanESM5,65,7,9,8,2,11,14
+MIROC6,50,0,0,1,0,0,1

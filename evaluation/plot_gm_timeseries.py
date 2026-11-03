@@ -5,17 +5,22 @@ import pickle as pkl
 from utils.data_utils import load_truncated_prediction, load_truth
 from evaluation.utils.metrics import global_mean, global_mean_flat, coord_to_dtindex, smooth_truth
 from evaluation.utils.bootstrap import member_bootstrap_rmsd, paired_difference
-from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
 from utils.params import esms, method_names, colors, year_ranges, lags
 import matplotlib.pyplot as plt
 import math
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+import matplotlib.dates as mdates
 from matplotlib.ticker import MaxNLocator
 import pandas as pd
 from utils.params import method_markers
 from utils.params import (pdf_root, requested_lags, requested_year_ranges, requested_clim_vars,
                           run_suffixes, results_dir, regions, region_vars)
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~19.7 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 22, 25, 28, 31
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 esms = esms[1:] # Exclude obs for this figure
 
 ###########################################
@@ -66,7 +71,7 @@ def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, se
     CSV rows flag methods whose RMSD is significantly higher than the reference PullbackDMDc.
     Returns one CSV row (dict) per (period, method); the caller adds 'model'.
     """
-    tick_fontsize = 10
+    tick_fontsize = FS_TICK
     ref_method = reference_method(var)
     n_boot = int(os.getenv('PBDMDC_N_BOOT', '2000'))
 
@@ -103,6 +108,7 @@ def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, se
     mask_late    = period_late & ~mask_volc
 
     group_labels  = ['Volcanic\nintervals', f'{time_index[0].year}–1980\n(non-volc.)', f'1980–{time_index[-1].year}\n(non-volc.)']
+    tick_labels   = ['Volcanic', f'{time_index[0].year}–\n1980', f'1980–\n{time_index[-1].year}']  # short, for print
     group_masks   = [mask_volc, mask_early, mask_late]
     n_groups      = len(group_labels)
     n_methods     = len(methods)
@@ -174,7 +180,7 @@ def draw_rmsd_bars(ax_bar, timeseries_model, methods, truth, time_index, var, se
     if ci_top > 0:
         ax_bar.set_ylim(0, ci_top * 1.12)
     ax_bar.set_xticks(group_centers)
-    ax_bar.set_xticklabels(group_labels, fontsize=tick_fontsize)
+    ax_bar.set_xticklabels(tick_labels, fontsize=tick_fontsize)
     ax_bar.tick_params(axis='x', labelsize=tick_fontsize)
     ax_bar.tick_params(axis='y', labelsize=tick_fontsize)
 
@@ -251,11 +257,11 @@ def plot_timeseries_v1(timeseries, esms, method_names, colors, clim_vars_on_fig,
         #for model1 in esms:
         #    ax.plot(time_index, timeseries[model1][method_names[0]]['truth'],'--', color='gray', linewidth=1.0)
 
-        ax.set_title(f'{display_model_name(model)}: Global mean {clim_vars_on_fig[var]}', fontsize=14)
+        ax.set_title(f'{display_model_name(model)}: Global mean {clim_vars_on_fig[var]}', fontsize=FS_TITLE)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(time_index[0], time_index[-1])
-        ax.tick_params(axis='x', labelrotation=45, labelsize=12)
-        ax.tick_params(axis='y', labelsize=12)
+        ax.tick_params(axis='x', labelrotation=45, labelsize=FS_TICK)
+        ax.tick_params(axis='y', labelsize=FS_TICK)
 
     # Hide unused axes
     for j in range(n_models, n_rows * n_cols):
@@ -285,7 +291,7 @@ def plot_timeseries_v1(timeseries, esms, method_names, colors, clim_vars_on_fig,
         handles=legend_handles,
         loc='lower center',
         ncols=4,
-        fontsize=12,
+        fontsize=FS_TICK,
         bbox_to_anchor=(0.5, -0.1),
     )
     fig.tight_layout(rect=[0, 0.08, 1, 1])
@@ -391,11 +397,11 @@ def plot_timeseries_v2(timeseries, esms, method_names, colors, clim_vars_on_fig,
 
         ax_ts.plot(time_index, truth_gm, '--', color='black', linewidth=2.0, zorder=2)
         ax_ts.set_title(f'{display_model_name(model)}: GM {clim_vars_on_fig[var]}, time series',
-                        fontsize=14)
+                        fontsize=FS_TITLE)
         ax_ts.grid(True, alpha=0.3)
         ax_ts.set_xlim(time_index[0], time_index[-1])
-        ax_ts.tick_params(axis='x', labelrotation=45, labelsize=12)
-        ax_ts.tick_params(axis='y', labelsize=12)
+        ax_ts.tick_params(axis='x', labelrotation=45, labelsize=FS_TICK)
+        ax_ts.tick_params(axis='y', labelsize=FS_TICK)
 
         # ── Middle panel: continuous RMSD ───────────────────────────────────
         draw_volcanic_stripes(ax_rmsd)
@@ -416,10 +422,10 @@ def plot_timeseries_v2(timeseries, esms, method_names, colors, clim_vars_on_fig,
                          linewidth=1.2, alpha=alphas.get(method, 1.0), zorder=1)
 
         ax_rmsd.set_title(f'{display_model_name(model)}: GM {clim_vars_on_fig[var]}, 3yr RMSD, %',
-                        fontsize=14)
+                        fontsize=FS_TITLE)
         ax_rmsd.grid(True, alpha=0.3)
-        ax_rmsd.tick_params(axis='x', labelrotation=45, labelsize=10)
-        ax_rmsd.tick_params(axis='y', labelsize=10)
+        ax_rmsd.tick_params(axis='x', labelrotation=45, labelsize=FS_TICK)
+        ax_rmsd.tick_params(axis='y', labelsize=FS_TICK)
 
         # ── Bottom panel: staircase RMSD ────────────────────────────────────
         draw_volcanic_stripes(ax_stair)
@@ -452,10 +458,10 @@ def plot_timeseries_v2(timeseries, esms, method_names, colors, clim_vars_on_fig,
 
         #ax_stair.set_ylabel('RMSD by intervals (%)', fontsize=10)
         ax_stair.set_title(f'{display_model_name(model)}: GM {clim_vars_on_fig[var]}, accumulated RMSD, %',
-                        fontsize=14)
+                        fontsize=FS_TITLE)
         ax_stair.grid(True, alpha=0.3)
-        ax_stair.tick_params(axis='x', labelrotation=45, labelsize=10)
-        ax_stair.tick_params(axis='y', labelsize=10)
+        ax_stair.tick_params(axis='x', labelrotation=45, labelsize=FS_TICK)
+        ax_stair.tick_params(axis='y', labelsize=FS_TICK)
 
     # Hide unused axis triplets
     for j in range(n_models, n_rows * n_cols):
@@ -493,7 +499,7 @@ def plot_timeseries_v2(timeseries, esms, method_names, colors, clim_vars_on_fig,
         handles=legend_handles,
         loc='lower center',
         ncols=5,
-        fontsize=12,
+        fontsize=FS_TICK,
         bbox_to_anchor=(0.5, -0.08),
     )
     fig.tight_layout(rect=[0, 0.06, 1, 1])
@@ -513,12 +519,12 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
     # Keep x independent because row 3 uses categorical x; do not share y-axis
     # so each panel has independent y-scaling (especially for bottom row bar charts).
     # Add a spacer row between rows 2 and 3 so the shared x-axis of row 2 is visually separated.
-    spacer_height = 0.55
-    tick_fontsize = 10
+    spacer_height = 0.45
+    tick_fontsize = FS_TICK
     height_pattern = [panel_height_ratios[0], panel_height_ratios[1], spacer_height, panel_height_ratios[2]]
     fig, axes = plt.subplots(
         n_rows * 4, n_cols,
-        figsize=(5 * n_cols, sum(panel_height_ratios) / 5 * 10 * n_rows),
+        figsize=(5 * n_cols, sum(panel_height_ratios) / 5 * 15 * n_rows),
         sharex=False,
         sharey=False,
         squeeze=False,
@@ -596,11 +602,11 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
                 top_bounds.append((float(np.min([pred_min.min(), pred_max.min()])), float(np.max([pred_min.max(), pred_max.max()]))))
 
         ax_ts.plot(time_index, truth_gm, ':', color='black', linewidth=2.0, zorder=2)
-        ax_ts.set_title(f'{display_model_name(model)}', fontsize=14, pad=8)
+        ax_ts.set_title(f'{display_model_name(model)}', fontsize=FS_TITLE, pad=8)
         ax_ts.set_xlim(time_index[0], time_index[-1])
         ax_ts.tick_params(axis='y', labelsize=tick_fontsize)
         if col == 0:
-            ax_ts.set_ylabel(f'{label_prefix} {clim_vars_on_fig[var]} ({units[var]})', fontsize=11)
+            ax_ts.set_ylabel(f'{label_prefix} {clim_vars_on_fig[var]} ({units[var]})', fontsize=FS_LABEL)
             # Prune boundary ticks to avoid overlap with the RMSD panel when hspace=0.
             ax_ts.yaxis.set_major_locator(MaxNLocator(nbins=5, prune='lower'))
         else:
@@ -640,14 +646,14 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
                 continue
             middle_max_bounds.append(float(np.max(rmsd * 100.)))
 
-        ax_rmsd.tick_params(axis='x', labelrotation=45, labelsize=tick_fontsize)
+        ax_rmsd.xaxis.set_major_locator(mdates.YearLocator(50))
+        ax_rmsd.tick_params(axis='x', labelsize=tick_fontsize)
         ax_rmsd.tick_params(axis='y', labelsize=tick_fontsize)
         ax_rmsd.set_xlim(time_index[0], time_index[-1])
-        ax_rmsd.set_xlabel('Year', fontsize=10)
         if col == 0:
-            ax_rmsd.set_ylabel('3yr RMSD (%)', fontsize=10)
-            # Prune boundary ticks to avoid overlap with the top panel when hspace=0.
-            ax_rmsd.yaxis.set_major_locator(MaxNLocator(nbins=5, prune='upper'))
+            ax_rmsd.set_ylabel('3yr RMSD (%)', fontsize=FS_LABEL)
+            # Prune boundary ticks: the top one meets the top panel (hspace=0), the bottom one the year labels.
+            ax_rmsd.yaxis.set_major_locator(MaxNLocator(nbins=5, prune='both'))
         else:
             ax_rmsd.tick_params(axis='y', left=False, labelleft=False)
 
@@ -659,7 +665,7 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
             row['model'] = model
         ci_rows += rows
         if col == 0:
-            ax_bar.set_ylabel('RMSD by period (%)', fontsize=10)
+            ax_bar.set_ylabel('RMSD by\nperiod (%)', fontsize=FS_LABEL)
         
 
         # Spacer row is intentionally blank.
@@ -731,14 +737,15 @@ def plot_timeseries(timeseries, esms, method_names, colors, clim_vars_on_fig,
 
     fig.legend(
         handles=legend_handles,
-        loc='lower center',
+        loc='upper center',
         ncols=4,
-        fontsize=12,
-        bbox_to_anchor=(0.5, -0.03),
+        fontsize=FS_TICK,
+        bbox_to_anchor=(0.5, 0.0),
     )
     # Minimize the vertical gap so first two rows visually stack as a shared-x pair.
-    fig.tight_layout(rect=[0, 0.06, 1, 1], h_pad=0.0)
+    fig.tight_layout(h_pad=0.0)
     fig.subplots_adjust(hspace=0.0, wspace=0.10)
+    fig.align_ylabels(axes[:, 0])
 
     return fig, axes, ci_rows
 

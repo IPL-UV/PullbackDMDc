@@ -6,13 +6,25 @@ import pickle
 import cartopy.crs as ccrs
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
 from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker
 from utils.data_utils import undo_lat_scaling
 from evaluation.utils.members import SELECTED_MEMBERS
-from evaluation.utils.style import CLIM_VARS_ON_FIG, TIMESCALE_BANDS, display_model_name, p95_abs
+from evaluation.utils.style import TIMESCALE_BANDS, p95_abs, set_font_sizes
 from utils.params import artifact_root, pdf_root, predictions_dir
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.gridspec as gridspec
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~13.6-14.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 17, 18, 21, 23
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
+
+
+def inner_yticks(ax, nbins=4, margin=0.08):
+    """Y ticks strictly inside the limits, so the end labels of vertically stacked panels do not clash."""
+    lo, hi = ax.get_ylim()
+    pad = margin * (hi - lo)
+    ax.set_yticks([t for t in MaxNLocator(nbins=nbins).tick_values(lo, hi) if lo + pad <= t <= hi - pad])
 
 # Parameters for selection
 lag=3
@@ -52,7 +64,6 @@ base_pred_dir = predictions_dir(year_suffix, lag_suffix)
 
 top_n = 4
 map_cmap = 'RdBu_r'
-shared_fontsize = 12
 internal_smooth_sigma = 12 * 8 # eight years
 #acf_length = [100 * 12] * 2 + [20*12] * (top_n-2)
 
@@ -301,9 +312,10 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
             cax_map = ax_map.inset_axes([0.12, -0.12, 0.76, 0.05])
             # Pa values are large, so whole numbers keep the colorbar ticks from overlapping.
             cbar_format = '%.0f' if clim_var == 'psl' else '%.2f'
-            cbar_map = fig.colorbar(m, cax=cax_map, orientation='horizontal', format=cbar_format)
-            cbar_map.ax.tick_params(labelsize=shared_fontsize)
-            cbar_map.set_label(cbar_labels[clim_var], fontsize=shared_fontsize)
+            cbar_map = fig.colorbar(m, cax=cax_map, orientation='horizontal', format=cbar_format,
+                                    ticks=[-scale, 0, scale])  # three ticks fit at print size
+            cbar_map.ax.tick_params(labelsize=FS_TICK)
+            cbar_map.set_label(cbar_labels[clim_var], fontsize=FS_LABEL)
 
         # --- time series ---
         if ts_anchor_ax is None:
@@ -325,13 +337,14 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
         ax_ts.set_ylim(ts_min_k - ts_margin_k, ts_max_k + ts_margin_k)
 
         ax_ts.grid(True)
-        ax_ts.tick_params(axis='y', labelsize=shared_fontsize)
+        inner_yticks(ax_ts)
+        ax_ts.tick_params(axis='y', labelsize=FS_TICK)
         ts_axes.append(ax_ts)
         if k < top_n - 1:
             ax_ts.tick_params(labelbottom=False)
         else:
-            ax_ts.set_xlabel('Year', fontsize=shared_fontsize)
-            ax_ts.tick_params(axis='x', labelsize=shared_fontsize)
+            ax_ts.set_xlabel('Year', fontsize=FS_LABEL)
+            ax_ts.tick_params(axis='x', labelsize=FS_TICK)
 
         # --- ACF ---
         if acf_anchor_ax is None:
@@ -392,7 +405,7 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
                 0.92,
                 'ENSO',
                 color=TIMESCALE_BANDS['ENSO']['color'],
-                fontsize=shared_fontsize - 1,
+                fontsize=FS_TICK,
                 ha='center',
                 va='top',
                 transform=ax_acf.get_xaxis_transform(),
@@ -402,28 +415,29 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
                 0.92,
                 'PDO',
                 color=TIMESCALE_BANDS['PDO']['color'],
-                fontsize=shared_fontsize - 1,
+                fontsize=FS_TICK,
                 ha='center',
                 va='top',
                 transform=ax_acf.get_xaxis_transform(),
             )
         ax_acf.grid(True, which='both')
-        ax_acf.tick_params(axis='y', labelsize=shared_fontsize)
+        inner_yticks(ax_acf)
+        ax_acf.tick_params(axis='y', labelsize=FS_TICK)
         acf_axes.append(ax_acf)
         if k < top_n - 1:
             ax_acf.tick_params(labelbottom=False)
         else:
-            ax_acf.set_xlabel('Lag (years)', fontsize=shared_fontsize)
-            ax_acf.tick_params(axis='x', labelsize=shared_fontsize)
+            ax_acf.set_xlabel('Lag (years)', fontsize=FS_LABEL)
+            ax_acf.tick_params(axis='x', labelsize=FS_TICK)
 
         row_label_lines = row_labels[k].split('\n')
         mode_text = TextArea(
             row_label_lines[0],
-            textprops={'fontsize': 14, 'ha': 'right', 'va': 'center'}
+            textprops={'fontsize': FS_LABEL, 'ha': 'right', 'va': 'center'}
         )
         details_text = TextArea(
             '\n'.join(row_label_lines[1:]),
-            textprops={'fontsize': 12, 'ha': 'right', 'va': 'center'}
+            textprops={'fontsize': FS_TICK, 'ha': 'right', 'va': 'center'}
         )
         row_label_box = VPacker(
             children=[mode_text, details_text],
@@ -467,48 +481,31 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
         max(ax.get_position().y1 for ax in acf_axes),
     )
 
-    title_y = min(0.985, top_y + 0.015)
-    suptitle_y = min(0.995, title_y + 0.06)
-    fig.suptitle(
-        f'{display_model_name(chosen_model)}, {CLIM_VARS_ON_FIG[clim_var]}: Top {top_n} dynamic modes',
-        fontsize=17,
-        y=suptitle_y,
-    )
-    fig.text(0.5 * (col1_x0 + col1_x1), title_y, 'Spatial pattern', ha='center', va='bottom', fontsize=16, transform=fig.transFigure)
-    fig.text(0.5 * (col2_x0 + col2_x1), title_y, 'Time series', ha='center', va='bottom', fontsize=16, transform=fig.transFigure)
-    fig.text(0.5 * (col3_x0 + col3_x1), title_y, r'Internal ACF', ha='center', va='bottom', fontsize=16, transform=fig.transFigure)
+    pt = 1. / 72. / fig.get_figheight()  # one point as a figure fraction
+    title_y = top_y + 6 * pt
+    fig.text(0.5 * (col1_x0 + col1_x1), title_y, 'Spatial pattern', ha='center', va='bottom', fontsize=FS_TITLE, transform=fig.transFigure)
+    fig.text(0.5 * (col2_x0 + col2_x1), title_y, 'Time series', ha='center', va='bottom', fontsize=FS_TITLE, transform=fig.transFigure)
+    fig.text(0.5 * (col3_x0 + col3_x1), title_y, r'Internal ACF', ha='center', va='bottom', fontsize=FS_TITLE, transform=fig.transFigure)
 
     maps_bottom = min(ax.get_position().y0 for ax in map_axes)
     ts_bottom = min(ax.get_position().y0 for ax in ts_axes)
     acf_bottom = min(ax.get_position().y0 for ax in acf_axes)
 
-    ts_legend = fig.legend(
-        handles=shared_legend_handles,
+    # One legend for the time series and ACF columns, below their x tick labels and axis labels.
+    below_xlabel = 1.6 * (FS_TICK + FS_LABEL) * pt
+    legend = fig.legend(
+        handles=shared_legend_handles + acf_legend_handles,
         loc='upper center',
-        ncol=1,
-        fontsize=shared_fontsize,
+        ncol=3,
+        fontsize=FS_TICK,
         frameon=True,
         fancybox=False,
-        bbox_to_anchor=(0.5 * (col2_x0 + col2_x1), max(0.02, ts_bottom - 0.065)),
+        bbox_to_anchor=(0.5 * (col2_x0 + col3_x1), min(ts_bottom, acf_bottom) - below_xlabel),
         bbox_transform=fig.transFigure,
     )
-    ts_legend.get_frame().set_edgecolor('gray')
-    ts_legend.get_frame().set_linewidth(0.8)
-    ts_legend.get_frame().set_alpha(1.0)
-
-    acf_legend = fig.legend(
-        handles=acf_legend_handles,
-        loc='upper center',
-        ncol=2,
-        fontsize=shared_fontsize,
-        frameon=True,
-        fancybox=False,
-        bbox_to_anchor=(0.5 * (col3_x0 + col3_x1), max(0.01, acf_bottom - 0.06)),
-        bbox_transform=fig.transFigure,
-    )
-    acf_legend.get_frame().set_edgecolor('gray')
-    acf_legend.get_frame().set_linewidth(0.8)
-    acf_legend.get_frame().set_alpha(1.0)
+    legend.get_frame().set_edgecolor('gray')
+    legend.get_frame().set_linewidth(0.8)
+    legend.get_frame().set_alpha(1.0)
 
     plt.savefig(f'{results_dir}/dmd_modes_{chosen_model}_{clim_var}.pdf', dpi=300, bbox_inches='tight', transparent=True)
     plt.show()

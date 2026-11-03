@@ -1,14 +1,20 @@
 import os
 import pickle
 
+import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 
 from evaluation.utils.members import (SELECTED_HANDLE, acf_selected_index, mark_selected, method_files,
                                       selected_index)
-from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, TIMESCALE_BANDS, display_model_name
+from evaluation.utils.style import ESM_COLORS, TIMESCALE_BANDS, display_model_name, set_font_sizes
 from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+
+# Prints at ~7/8/9/10 pt at \textwidth (figure saves ~11.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 
 # ---------------------------------------------------------------
@@ -244,21 +250,24 @@ def gather_row2_row3_metrics(base_pred_dir, clim_var, chosen_method, top_n, smoo
     return smoothed_var_data, forced_fraction_data
 
 
-def compute_log_iqr_bounds(values, whisker_scale=1.5):
-    finite_values = np.asarray(values, dtype=float)
-    finite_values = finite_values[np.isfinite(finite_values) & (finite_values > 0.0)]
-    if finite_values.size == 0:
-        return None
+def row2_reference(row2_smoothed_var, obs_model='20CRv3'):
+    """Row 2 reference level: the larger of the reanalysis modes 1 and 2."""
+    return float(np.nanmax(row2_smoothed_var[obs_model][0][:2]))
 
-    log_values = np.log10(finite_values)
-    q1, q3 = np.percentile(log_values, [25.0, 75.0])
-    iqr = q3 - q1
-    if np.isclose(iqr, 0.0):
-        return (10.0 ** q1, 10.0 ** q3)
 
-    lower = 10.0 ** (q1 - whisker_scale * iqr)
-    upper = 10.0 ** (q3 + whisker_scale * iqr)
-    return lower, upper
+def row2_exceedance_table(row2_smoothed_var, ref, top_n, obs_model='20CRv3'):
+    """Per ESM: members whose smoothed internal variance reaches ref, by mode and over modes 1-2 / 1-4."""
+    rows = []
+    for model, member_sets in row2_smoothed_var.items():
+        if model == obs_model or not member_sets:
+            continue
+        reach = np.vstack(member_sets)[:, :top_n] >= ref  # NaN compares False
+        row = {'model': model, 'n_members': reach.shape[0]}
+        row.update({f'mode{k + 1}': int(reach[:, k].sum()) for k in range(top_n)})
+        row['any_mode_1_2'] = int(reach[:, :2].any(axis=1).sum())
+        row[f'any_mode_1_{top_n}'] = int(reach.any(axis=1).sum())
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def plot_summary_figure(
@@ -282,14 +291,7 @@ def plot_summary_figure(
  
     positions = np.arange(1, len(esms) + 1)
     tick_labels = [display_model_name(model) for model in esms]
-    row2_bounds_by_model = {}
-    for model_name, member_sets in row2_smoothed_var.items():
-        pooled_values = []
-        for member_vals in member_sets:
-            if member_vals.size == 0:
-                continue
-            pooled_values.extend(member_vals[np.isfinite(member_vals) & (member_vals > 0.0)])
-        row2_bounds_by_model[model_name] = compute_log_iqr_bounds(pooled_values)
+    row2_ref = row2_reference(row2_smoothed_var, obs_model)
 
     fig, axes = plt.subplots(
         3,
@@ -315,7 +317,7 @@ def plot_summary_figure(
             'title': f'Variance of Smoothed\nInternal Variability ({field_unit}$^2$)',
             'data': row2_smoothed_var,
             'selected': selected_sorted,
-            'xscale': 'linear',
+            'xscale': 'log',  # all members are shown, spanning orders of magnitude
             'xlabel': rf'Var of smoothed $w\,\tilde{{z}}(t)$ [{field_unit}$^2$]',
             'valid': lambda x: np.isfinite(x) & (x > 0),
             'xlim': None,
@@ -356,11 +358,6 @@ def plot_summary_figure(
                     dtype=float,
                 )
                 valid = row_cfg['valid'](values)
-                if row_idx == 1:
-                    bounds = row2_bounds_by_model.get(chosen_model)
-                    if bounds is not None:
-                        lower, upper = bounds
-                        valid = valid & (values >= lower) & (values <= upper)
                 if not valid.any():
                     continue
 
@@ -383,10 +380,11 @@ def plot_summary_figure(
                 if sel is not None and metric_members[sel].size > mode_idx:
                     sel_value = np.array([metric_members[sel][mode_idx]], dtype=float)
                     sel_valid = row_cfg['valid'](sel_value)
-                    if row_idx == 1 and bounds is not None:
-                        sel_valid = sel_valid & (sel_value >= lower) & (sel_value <= upper)
                     if sel_valid[0]:
                         mark_selected(ax, sel_value[0], pos, 0.18)
+
+            if row_idx == 1:
+                ax.axvline(row2_ref, ls='--', color='black', lw=1.0, zorder=2)
 
             ax.set_xscale(row_cfg['xscale'])
             if row_cfg['xlim'] is not None:
@@ -399,9 +397,9 @@ def plot_summary_figure(
                 ax.set_yticklabels([])
 
             if row_idx == 0:
-                ax.set_title(f'Mode {mode_idx + 1}', fontsize=13)
+                ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
             if mode_idx == 0:
-                ax.set_ylabel(row_cfg['title'], fontsize=12)
+                ax.set_ylabel(row_cfg['title'], fontsize=FS_LABEL)
 
     member_handle = plt.scatter(
         [], [], marker=method_marker, s=24,
@@ -414,9 +412,9 @@ def plot_summary_figure(
         label='20CRv3 member',
     )
 
-    fig.suptitle(f'{CLIM_VARS_ON_FIG[clim_var]}: Robustness', fontsize=18)
-    fig.legend(handles=[SELECTED_HANDLE], loc='lower center', bbox_to_anchor=(0.5, -0.03), frameon=False,
-               fontsize=11)
+    ref_handle = mlines.Line2D([], [], ls='--', color='black', lw=1.0, label=f'{obs_model} mode 1 (Row 2)')
+    fig.legend(handles=[SELECTED_HANDLE, ref_handle], loc='upper center', bbox_to_anchor=(0.5, 0.0),
+               ncol=2, frameon=False, fontsize=FS_TICK)
 
     out_path = os.path.join(
         results_dir,
@@ -506,6 +504,12 @@ def main():
             selected_sorted=selected_sorted,
         )
         print(f'Saved: {out_path}')
+
+        ref = row2_reference(row2_smoothed_var)
+        exceedance = row2_exceedance_table(row2_smoothed_var, ref, top_n)
+        print(f'{clim_var}: members with smoothed internal variance >= 20CRv3 mode 1 ({ref:.4g})\n'
+              f'{exceedance.to_string(index=False)}', flush=True)
+        exceedance.to_csv(os.path.join(pdf_results_dir, f'mode_summary_row2_exceedance_{clim_var}.csv'), index=False)
 
 
 if __name__ == '__main__':

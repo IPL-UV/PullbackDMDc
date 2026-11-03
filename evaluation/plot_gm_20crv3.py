@@ -3,12 +3,14 @@
 psl is averaged south of 65°S (params.regions['s65']) instead of globally; the other variables are global means.
 ESM ensemble means are a reference, not a truth. All series are anomalies w.r.t. 1850-1900. As in
 compute_gm_timeseries, the series are monthly and the psl truths (20CRv3, ESM means) are 3-year smoothed.
+Major eruptions are shaded as in plot_gm_timeseries.
 Run: PBDMDC_LAGS=3 PBDMDC_YEAR_RANGES=1850-2014 python -m evaluation.plot_gm_20crv3
 """
 import os
 import pickle as pkl
 
 import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -16,7 +18,7 @@ import pandas as pd
 from evaluation.utils.metrics import (coord_to_dtindex, global_mean, global_mean_flat, lat_flat_from_pars,
                                       regional_mean, regional_mean_flat, smooth_truth)
 from evaluation.utils.style import (CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, METHOD_NAMES_ON_FIG,
-                                    display_model_name)
+                                    VOLCANIC_COLOR, VOLCANIC_EVENTS, display_model_name)
 from utils.data_utils import load_truncated_prediction, load_truth
 from utils.params import (artifact_root, colors, pdf_root, predictions_dir, regions, requested_lags,
                           requested_year_ranges, run_suffixes)
@@ -30,14 +32,12 @@ region_labels = {'s65': 'S of 65°S'}
 baseline = (1850, 1900)
 late_period = (1985, 2014)  # for the summary csv
 FONTSIZE = 14
+lim_alpha = 0.45
+raw_color = '0.6'
 
 
 def best_method(var):
     return 'PullbackDMDc-2d' if var == 'psl' else 'PullbackDMDc-3d'
-
-
-def methods_for(var):
-    return ['LR', 'LIM', best_method(var)]  # best variant last so it is drawn on top
 
 
 def truth_gm(var, model, year_suffix):
@@ -78,22 +78,30 @@ def plot_figure(year_suffix, run_suffix):
     summary = []
     for ax, var in zip(axes, clim_vars):
         time_index, raw = truth_gm(var, obs, year_suffix)
-        series = []  # (key, label, values, plot kwargs), back to front
+        best = best_method(var)
+        forced = {}
+        for method in ['LIM', 'LR', best]:
+            forced[method] = forced_gm(var, method, year_suffix, run_suffix)
+            assert len(forced[method]) == len(time_index), \
+                f'{var} {method}: {len(forced[method])} steps, truth has {len(time_index)}'
+
+        # (key, label, values, plot kwargs), back to front: LIM, raw, ESMs, LR, best PullbackDMDc variant
+        series = [('LIM', METHOD_NAMES_ON_FIG['LIM'], forced['LIM'],
+                   dict(color=colors['LIM'], lw=1.5, alpha=lim_alpha, zorder=1)),
+                  (obs, f'{obs} raw (forced + internal)', raw, dict(color=raw_color, lw=0.8, zorder=2))]
         for model in esms:
             t_esm, gm = truth_gm(var, model, year_suffix)
             # Datasets stamp months on different days; only the months need to agree.
             assert t_esm.to_period('M').equals(time_index.to_period('M')), \
                 f'{model} {var}: months differ from {obs} ({t_esm[[0, -1]]} vs {time_index[[0, -1]]})'
             series.append((model, display_model_name(model), gm,
-                           dict(color=ESM_COLORS[model], ls=ESM_LINESTYLES[model], lw=1.0, zorder=1)))
-        series.append((obs, f'{obs} raw (forced + internal)', raw,
-                       dict(color=ESM_COLORS[obs], lw=0.8, alpha=0.6, zorder=2)))
-        for method in methods_for(var):
-            gm = forced_gm(var, method, year_suffix, run_suffix)
-            assert len(gm) == len(time_index), f'{var} {method}: {len(gm)} steps, truth has {len(time_index)}'
-            lw, zorder = (2.0, 4) if method == best_method(var) else (1.5, 3)
-            series.append((method, METHOD_NAMES_ON_FIG[method], gm, dict(color=colors[method], lw=lw, zorder=zorder)))
+                           dict(color=ESM_COLORS[model], ls=ESM_LINESTYLES[model], lw=1.0, zorder=3)))
+        series.append(('LR', METHOD_NAMES_ON_FIG['LR'], forced['LR'], dict(color=colors['LR'], lw=1.5, zorder=4)))
+        series.append((best, METHOD_NAMES_ON_FIG[best], forced[best], dict(color=colors[best], lw=2.0, zorder=5)))
 
+        for start, end, _ in VOLCANIC_EVENTS:
+            ax.axvspan(pd.Timestamp(f'{start}-01-01'), pd.Timestamp(f'{end}-01-01'), color=VOLCANIC_COLOR,
+                       alpha=0.35, zorder=0, linewidth=0)
         for key, label, x, kw in series:
             x = rebase(time_index, x)
             ax.plot(time_index, x, label=label, **kw)
@@ -112,10 +120,12 @@ def plot_figure(year_suffix, run_suffix):
     # Methods (both PullbackDMDc variants appear) and raw on the first row, ESMs on the second.
     method_keys = ['LR', 'LIM'] + sorted({best_method(v) for v in clim_vars}, reverse=True)
     handles = [mlines.Line2D([], [], color=colors[m], lw=2.0 if m.startswith('Pullback') else 1.5,
-                             label=METHOD_NAMES_ON_FIG[m]) for m in method_keys]
-    handles.append(mlines.Line2D([], [], color=ESM_COLORS[obs], lw=0.8, alpha=0.6, label=f'{obs} raw'))
+                             alpha=lim_alpha if m == 'LIM' else 1.0, label=METHOD_NAMES_ON_FIG[m])
+               for m in method_keys]
+    handles.append(mlines.Line2D([], [], color=raw_color, lw=0.8, label=f'{obs} raw'))
     esm_handles = [mlines.Line2D([], [], color=ESM_COLORS[m], ls=ESM_LINESTYLES[m], lw=1.0,
                                 label=display_model_name(m)) for m in esms]
+    esm_handles.append(mpatches.Patch(color=VOLCANIC_COLOR, alpha=0.35, label='Volcanic event'))
     esm_handles += [mlines.Line2D([], [], alpha=0, label=' ')] * (len(handles) - len(esm_handles))
     # Legend fills column by column, so interleave the two rows.
     fig.legend(handles=[h for pair in zip(handles, esm_handles) for h in pair], loc='upper center',
