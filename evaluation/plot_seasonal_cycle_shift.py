@@ -1,10 +1,9 @@
-"""Seasonal-cycle change in 20CRv3 and in the internal part of PullbackDMDc modes 3-4 (annual-period pair).
+"""Seasonal-cycle change in 20CRv3: smoothed seasonal deviations in a box and DJF - JJA trend maps.
 
-The forced estimate has no seasonal cycle, so seasonal-cycle changes end up in the internal component.
+Also maps the DJF - JJA trend of each ESM's ensemble mean on the same scale.
 Run: PBDMDC_LAGS=3 PBDMDC_YEAR_RANGES=1850-2014 python -m evaluation.plot_seasonal_cycle_shift
 """
 import os
-import pickle as pkl
 
 import cartopy.crs as ccrs
 import matplotlib.lines as mlines
@@ -12,25 +11,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from cartopy.util import add_cyclic_point
-from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
 from scipy.ndimage import gaussian_filter1d
 
-from evaluation.utils.metrics import coord_to_dtindex, global_mean_flat, lat_flat_from_pars, regional_mean
-from evaluation.utils.style import display_model_name
-from utils.data_utils import load_truth, undo_lat_scaling
-from utils.params import (artifact_root, base_path, pdf_root, predictions_dir, requested_lags,
-                          requested_year_ranges, run_suffixes)
+from evaluation.utils.metrics import coord_to_dtindex, regional_mean
+from evaluation.utils.style import display_model_name, set_font_sizes
+from utils.data_utils import load_truth
+from utils.params import artifact_root, base_path, pdf_root, requested_lags, requested_year_ranges, run_suffixes
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~15.9 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 18, 20, 23, 25
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 obs = '20CRv3'
 esms = ['CESM2', 'CanESM5', 'MIROC6', 'MPI-ESM1-2-LR']
-panels = [('SAT N of 65°N', 'tas', 'n65', 'PullbackDMDc-3d'),
-          ('SLP N Pacific', 'psl', 'npac', 'PullbackDMDc-2d')]
+panels = [('SAT N of 65°N', 'tas', 'n65'),
+          ('SLP N Pacific', 'psl', 'npac')]
 # (lat_min, lat_max, lon_min, lon_max); npac covers the negative DJF-JJA SLP trend of the North Pacific.
 boxes = {'n65': (65, 90, 0, 360), 'npac': (25, 45, 135, 195)}
 var_names = {'tas': 'SAT', 'psl': 'SLP'}
 units = {'tas': 'K', 'psl': 'Pa'}  # regional means are in the data's units
-mode_ks = [2, 3]  # modes 3 and 4
-smooth_sigma_years = 8  # as internal_smooth_sigma in plot_modes.py
+smooth_sigma_years = 8  # years, as internal_smooth_sigma in plot_modes.py
 per_century = 100.0
 map_cmap = 'RdBu_r'
 n_boot = 1000
@@ -92,42 +92,10 @@ def box_stats(lat, lon, trend, significant, box):
     return mean, np.mean(sig & (np.sign(tr) == np.sign(mean)))
 
 
-def load_fit(var, method, year_suffix, run_suffix):
-    model_dir = os.path.join(predictions_dir(year_suffix, run_suffix), var, obs)
-    files = [f for f in os.listdir(model_dir) if f.split('_')[-1].split('.')[0] == method]
-    assert len(files) == 1, f'{model_dir}: expected one {method} file, got {files}'
-    with open(os.path.join(model_dir, files[0]), 'rb') as f:
-        dmd = pkl.load(f)
-    eof_file = os.path.join(artifact_root, f'eofs{year_suffix}', var, obs, files[0].replace('_' + method, ''))
-    with open(eof_file, 'rb') as f:
-        pars = pkl.load(f)['data_pars']
-    return dmd, pars
-
-
-def components(var, region, dmd, pars, year_suffix):
-    """Regional mean of the raw reanalysis and of the forced estimate, as in compute_gm_timeseries."""
-    truth, lat = load_truth(var, obs, os.path.join(artifact_root, f'means{year_suffix}'), return_lats=True)
-    raw = box_mean(truth, lat, truth['lon'].values, boxes[region])
-    # Same reconstruction as load_truncated_prediction.
-    svals = np.sqrt((dmd.eofs ** 2).sum(axis=-1))
-    recon = (dmd.fr_pcs.real * svals) @ (dmd.eofs / svals[:, None])
-    forced = box_mean_flat(recon, pars, boxes[region])
-    return coord_to_dtindex(truth.time), {'raw': raw, 'forced': forced, 'internal': raw - forced}
-
-
 def box_mean(truth, lat, lon, box):
     lat0, lat1, lon0, lon1 = box
     sel = (lon % 360 >= lon0) & (lon % 360 <= lon1)
     return np.ma.getdata(regional_mean(truth.to_masked_array()[..., sel], lat, lat0, lat1)).astype(float)
-
-
-def box_mean_flat(data_flat, pars, box):
-    lat0, lat1, lon0, lon1 = box
-    lat_flat = lat_flat_from_pars(pars)
-    lon_flat = np.repeat(pars['lon'].values[None, :], pars['lat'].size, axis=0)[~pars['nan_mask']] % 360
-    sel = (lat_flat >= lat0) & (lat_flat <= lat1) & (lon_flat >= lon0) & (lon_flat <= lon1)
-    assert sel.any(), f'No grid points in {box}'
-    return global_mean_flat(data_flat[..., sel], pars['resc_coef_flat'][sel])
 
 
 def unscale(field, lat):
@@ -151,33 +119,6 @@ def member_files(var, model):
     return [os.path.join(input_dir, f) for f in files]
 
 
-def modes34(var, region, method, dmd, pars, time_index):
-    dmd.compute_modes()
-    rotated = dmd.compute_rotated_modes(top_n=max(mode_ks) + 1)
-    labels = [rotated['labels'][k] for k in mode_ks]
-    assert all(lab == (f'{mode_ks[0] + 1},{mode_ks[1] + 1}', 'complex') for lab in labels), labels
-    lam = rotated['eigvals'][mode_ks[0]]
-    freq = 6 * abs(np.angle(lam) / dmd.lag) / np.pi
-    print(f'{var} {method} modes 3-4: {labels}, freq {freq:.3f}/y', flush=True)
-
-    patterns = rotated['spatial_patterns'][:, mode_ks]
-    ts = rotated['internal_time_series'][:, mode_ks]
-    # The sum over the pair is real and does not depend on its PCA rotation.
-    recon = ts @ patterns.T
-    series = box_mean_flat(recon, pars, boxes[region])
-
-    years, TS = by_month(ts, time_index)
-    map_flat = patterns @ ols_trend(years, contrast(TS))[0]
-    idx = np.linspace(0, recon.shape[1] - 1, 7).astype(int)
-    slow = ols_trend(years, contrast(by_month(recon[:, idx], time_index)[1]))[0]
-    assert np.allclose(slow, map_flat[idx], rtol=1e-6, atol=1e-10 * np.abs(map_flat).max()), (slow, map_flat[idx])
-
-    lat, lon = pars['lat'].values, pars['lon'].values
-    trend_map = undo_lat_scaling(map_flat[:, None], lat, lon.size, nan_mask=pars['nan_mask'])[:, :, 0]
-    trend_map[np.cos(np.deg2rad(lat)) < 1e-6] = np.nan
-    return series, lat, lon, trend_map, freq
-
-
 def seasonal_deviation(X):
     dev = X - X.mean(axis=1, keepdims=True)
     return {season: dev[:, months].mean(axis=1) for season, months in season_months.items()}
@@ -194,35 +135,6 @@ def draw_deviation(ax, years, dev):
     return smoothed
 
 
-def draw_monthly_trends(ax, trends, r, unit):
-    """OLS trend of each calendar month; DJF and JJA months are shaded as in the DJF - JJA maps."""
-    for season in ['DJF', 'JJA']:
-        for month in season_months[season]:
-            ax.axvspan(month + 0.5, month + 1.5, color=season_hues[season], alpha=0.12, linewidth=0)
-    months = np.arange(1, 13)
-    style = dict(marker='o', markersize=3.5, linewidth=1.5, zorder=3)
-    ax.plot(months, trends['internal'], color='black', label=f'{obs} internal', **style)
-    ax.plot(months, trends['modes34'], color='#E69F00', label='modes 3–4', **style)
-    ax.axhline(0, color='0.5', linewidth=0.6)
-    ax.set_xticks(months, list('JFMAMJJASOND'))
-    ax.set_xlim(0.5, 12.5)
-    ax.set_ylabel(f'trend ({unit}/century)', fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.set_axisbelow(True)
-    ax.legend(fontsize=8, loc='best', framealpha=0.85)
-    ax.set_title(f'Trend by calendar month (r = {r:.2f})', fontsize=12)
-
-
-def annotate_r(ax, r):
-    parts = [TextArea('r', textprops=dict(fontsize=9))]
-    parts += [TextArea(f'{s} {v:.2f}', textprops=dict(color=season_hues[s], fontsize=9, fontweight='bold'))
-              for s, v in r.items()]
-    box = AnchoredOffsetbox(loc='upper left', child=HPacker(children=parts, pad=0, sep=6), pad=0.3, borderpad=0.4,
-                            frameon=True)
-    box.patch.set(facecolor='white', alpha=0.85, edgecolor='none')
-    ax.add_artist(box)
-
-
 def pattern_corr(a, b, lat):
     w = np.broadcast_to(np.cos(np.deg2rad(lat))[:, None], a.shape)
     ok = np.isfinite(a) & np.isfinite(b)
@@ -231,15 +143,7 @@ def pattern_corr(a, b, lat):
     return np.sum(w * a * b) / np.sqrt(np.sum(w * a * a) * np.sum(w * b * b))
 
 
-def pattern_slope(a, b, lat):  # slope of b (modes 3-4) on a (20CRv3)
-    w = np.broadcast_to(np.cos(np.deg2rad(lat))[:, None], a.shape)
-    ok = np.isfinite(a) & np.isfinite(b)
-    a, b, w = a[ok], b[ok], w[ok]
-    a, b = a - np.average(a, weights=w), b - np.average(b, weights=w)
-    return np.sum(w * a * b) / np.sum(w * a * a)
-
-
-def draw_map(ax, lat, lon, field, levels, region, stipple=None):
+def draw_map(ax, lat, lon, field, levels, region, stipple=None, outline=True):
     field_c, lon_c = add_cyclic_point(field, coord=lon)
     m = ax.contourf(lon_c, lat, field_c, levels=levels, cmap=map_cmap, extend='both', transform=ccrs.PlateCarree())
     if stipple is not None:
@@ -247,90 +151,66 @@ def draw_map(ax, lat, lon, field, levels, region, stipple=None):
         ax.contourf(lon_c, lat, stipple_c, levels=[0.5, 1.5], colors='none', hatches=['..'],
                     transform=ccrs.PlateCarree())
     ax.coastlines(linewidth=0.5)
-    lat0, lat1, lon0, lon1 = boxes[region]
-    if lon1 - lon0 >= 360:
-        lons, lats = np.linspace(-180, 180, 361), np.full(361, lat0 if lat1 == 90 else lat1)
-    else:
-        lons, lats = [lon0, lon1, lon1, lon0, lon0], [lat0, lat0, lat1, lat1, lat0]
-    ax.plot(lons, lats, color='black', linestyle='--', linewidth=1.0, transform=ccrs.PlateCarree())
+    if outline:
+        lat0, lat1, lon0, lon1 = boxes[region]
+        if lon1 - lon0 >= 360:
+            lons, lats = np.linspace(-180, 180, 361), np.full(361, lat0 if lat1 == 90 else lat1)
+        else:
+            lons, lats = [lon0, lon1, lon1, lon0, lon0], [lat0, lat0, lat1, lat1, lat0]
+        ax.plot(lons, lats, color='black', linestyle='--', linewidth=1.0, transform=ccrs.PlateCarree())
     ax.set_global()
     return m
 
 
-def plot_drift(panel, year_suffix, run_suffix):
-    label, var, region, method = panel
-    plt.rcParams['hatch.linewidth'] = 0.3
-    fig = plt.figure(figsize=(14.5, 6.75), layout='constrained')
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1.2])
-    gs_top, gs_maps = gs[0].subgridspec(1, 3, width_ratios=[1, 1, 0.7]), gs[1].subgridspec(1, 2)
-    dmd, pars = load_fit(var, method, year_suffix, run_suffix)
-    time_index, comps = components(var, region, dmd, pars, year_suffix)
-    series, lat_m, lon_m, map_modes, freq = modes34(var, region, method, dmd, pars, time_index)
-    assert series.shape == comps['raw'].shape
-    comps['modes34'] = series
-    by = {key: by_month(x, time_index) for key, x in comps.items()}
-    trends = {key: ols_trend(*by[key])[0] for key in ['forced', 'internal', 'modes34']}
-    a = trends['internal'] - trends['internal'].mean()
-    b = trends['modes34'] - trends['modes34'].mean()
-
-    ax_obs = fig.add_subplot(gs_top[0])
-    ax_mod = fig.add_subplot(gs_top[1], sharex=ax_obs, sharey=ax_obs)
-    dev_obs, dev_mod = seasonal_deviation(by['raw'][1]), seasonal_deviation(by['modes34'][1])
-    sm_obs = draw_deviation(ax_obs, by['raw'][0], dev_obs)
-    sm_mod = draw_deviation(ax_mod, by['modes34'][0], dev_mod)
-    lim = 1.1 * np.abs(np.concatenate([np.ravel(list(d.values())) for d in (sm_obs, sm_mod)])).max()
-    ax_obs.set_ylim(-lim, lim)
-    r_smooth = {s: np.corrcoef(sm_obs[s], sm_mod[s])[0, 1] for s in season_months}
-    r_yearly = {s: np.corrcoef(dev_obs[s], dev_mod[s])[0, 1] for s in season_months}
-    annotate_r(ax_mod, r_smooth)
-    ax_obs.set_ylabel(f'{label}\ndeviation from annual mean ({units[var]})\nGaussian σ = {smooth_sigma_years} yr',
-                      fontsize=10)
-    ax_obs.set_title(obs, fontsize=12)
-    ax_mod.set_title('PullbackDMDc internal, modes 3–4', fontsize=12)
-    draw_monthly_trends(fig.add_subplot(gs_top[2]), trends, np.corrcoef(a, b)[0, 1], units[var])
-
-    lat_o, lon_o, map_obs, stip_obs = obs_contrast_trend_map(var, year_suffix, obs)
-    assert np.allclose(lat_o, lat_m) and np.allclose(lon_o, lon_m), f'{var}: means and EOF grids differ'
-    scale = max(np.nanpercentile(np.abs(np.concatenate([map_obs.ravel(), map_modes.ravel()])), 95), 1e-12)
+def nice_levels(field):
+    scale = max(np.nanpercentile(np.abs(field), 95), 1e-12)
     step = scale / 5
     mag = 10 ** np.floor(np.log10(step))
     step = mag * min(s for s in (1, 2, 5, 10) if s * mag >= step)
-    levels = step * np.arange(-5, 6)
-    proj = ccrs.PlateCarree(central_longitude=180)
-    map_axes = [fig.add_subplot(gs_maps[j], projection=proj) for j in range(2)]
-    m = draw_map(map_axes[0], lat_o, lon_o, map_obs, levels, region, stip_obs)
-    draw_map(map_axes[1], lat_m, lon_m, map_modes, levels, region)
-    r_pattern = pattern_corr(map_obs, map_modes, lat_o)
-    map_axes[1].text(0.02, 0.04, f'pattern r = {r_pattern:.2f}', transform=map_axes[1].transAxes, fontsize=9,
-                     bbox=dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.5))
-    map_axes[0].text(-0.04, 0.5, f'{var_names[var]}: DJF − JJA trend', transform=map_axes[0].transAxes,
-                     rotation=90, ha='right', va='center', fontsize=10)
-    cbar = fig.colorbar(m, ax=map_axes, orientation='horizontal', fraction=0.06, aspect=50,
-                        format='%g')
-    cbar.set_label(f'{var_names[var]} DJF − JJA trend, {by["raw"][0][0]}–{by["raw"][0][-1]} '
-                   f'({units[var]}/century); stippling: |{obs} trend| exceeds {level}% of {n_boot} block-bootstrap ({block_years}-yr) null trends',
-                   fontsize=9)
+    return step * np.arange(-5, 6)
 
-    row = {'index': label, 'method': method, 'trend_profile_corr': np.corrcoef(a, b)[0, 1],
-           'trend_profile_regression_slope': (a @ b) / (a @ a), 'forced_trend_spread': np.ptp(trends['forced']),
-           'pattern_r': r_pattern, 'pattern_slope': pattern_slope(map_obs, map_modes, lat_o),
-           'modes34_freq_per_year': freq}
-    w = np.cos(np.deg2rad(lat_o))[:, None] * np.ones_like(map_obs)
-    row['stippled_area'] = np.sum(w * stip_obs) / np.sum(w)
-    row['box_mean_trend'], row['box_frac_significant_same_sign'] = box_stats(lat_o, lon_o, map_obs, stip_obs,
-                                                                             boxes[region])
-    print(f'{label} box {boxes[region]}: mean trend {row["box_mean_trend"]:.3g} {units[var]}/century, '
-          f'{row["box_frac_significant_same_sign"]:.0%} of cells significant with the same sign', flush=True)
-    row.update({f'r_{s}_smoothed': r_smooth[s] for s in season_months})
-    row.update({f'r_{s}_yearly': r_yearly[s] for s in season_months})
-    print(f'{label}: r smoothed {np.round(list(r_smooth.values()), 2)}, r yearly '
-          f'{np.round(list(r_yearly.values()), 2)} (DJF MAM JJA SON); pattern r {r_pattern:.2f}; '
-          f'trend-profile corr {row["trend_profile_corr"]:.2f}', flush=True)
+
+def plot_obs(year_suffix):
+    """One row per panel: 20CRv3 smoothed seasonal deviations in the box and the DJF - JJA trend map."""
+    plt.rcParams['hatch.linewidth'] = 0.3
+    fig = plt.figure(figsize=(14.5, 9), layout='constrained')
+    gs = fig.add_gridspec(len(panels), 2, width_ratios=[1, 1.3])
+    proj = ccrs.PlateCarree(central_longitude=180)
+    summary, levels = [], {}
+    for i, (label, var, region) in enumerate(panels):
+        truth, lat = load_truth(var, obs, os.path.join(artifact_root, f'means{year_suffix}'), return_lats=True)
+        raw = box_mean(truth, lat, truth['lon'].values, boxes[region])
+        years, X = by_month(raw, coord_to_dtindex(truth.time))
+        ax = fig.add_subplot(gs[i, 0])
+        draw_deviation(ax, years, seasonal_deviation(X))
+        ax.set_ylabel(f'{label}:\ndeviation ({units[var]})', fontsize=FS_LABEL)
+        if i == 0:
+            ax.set_title(f'{obs} seasonal deviation', fontsize=FS_TITLE)
+
+        lat_o, lon_o, map_obs, stip_obs = obs_contrast_trend_map(var, year_suffix, obs)
+        levels[var] = nice_levels(map_obs)
+        ax_map = fig.add_subplot(gs[i, 1], projection=proj)
+        m = draw_map(ax_map, lat_o, lon_o, map_obs, levels[var], region, stip_obs)
+        if i == 0:
+            ax_map.set_title(f'{obs} DJF − JJA trend', fontsize=FS_TITLE)
+        cbar = fig.colorbar(m, ax=ax_map, orientation='horizontal', fraction=0.06, aspect=40, format='%g')
+        cbar.set_label(f'{var_names[var]} DJF − JJA trend, {years[0]}–{years[-1]} ({units[var]}/century)',
+                       fontsize=FS_LABEL)
+
+        row = {'index': label}
+        w = np.cos(np.deg2rad(lat_o))[:, None] * np.ones_like(map_obs)
+        row['stippled_area'] = np.sum(w * stip_obs) / np.sum(w)
+        row['box_mean_trend'], row['box_frac_significant_same_sign'] = box_stats(lat_o, lon_o, map_obs, stip_obs,
+                                                                                 boxes[region])
+        print(f'{label} box {boxes[region]}: mean trend {row["box_mean_trend"]:.3g} {units[var]}/century, '
+              f'{row["box_frac_significant_same_sign"]:.0%} of cells significant with the same sign', flush=True)
+        summary.append(row)
 
     handles = [mlines.Line2D([], [], color=c, linewidth=2.0, label=s) for s, c in season_hues.items()]
-    fig.legend(handles=handles, loc='upper center', ncol=4, fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.0),
-               title='Season', title_fontsize=9)
-    return fig, row, levels, trends
+    fig.legend(handles=handles, loc='upper center', ncol=4, fontsize=FS_TICK, frameon=False, bbox_to_anchor=(0.5, 0.0),
+               title=f'Season (smoothed, σ = {smooth_sigma_years} yr); stippling: |trend| exceeds {level}% of '
+                     f'{n_boot} block-bootstrap ({block_years}-yr) null trends', title_fontsize=FS_TICK)
+    return fig, summary, levels
 
 
 def plot_esm_ensmean(year_suffix, levels):
@@ -339,30 +219,30 @@ def plot_esm_ensmean(year_suffix, levels):
     fig = plt.figure(figsize=(16, 13), layout='constrained')
     gs = fig.add_gridspec(4, 3)
     proj = ccrs.PlateCarree(central_longitude=180)
-    for i, (label, var, region, method) in enumerate(panels):
+    for i, (label, var, region) in enumerate(panels):
         box = boxes[region]
         lat, lon, map_obs, stip_obs = obs_contrast_trend_map(var, year_suffix, obs)
         no_stip = np.zeros(map_obs.shape, dtype=bool)
         ax = fig.add_subplot(gs[2 * i, 0], projection=proj)
-        m = draw_map(ax, lat, lon, map_obs, levels[var], region, stip_obs)
+        m = draw_map(ax, lat, lon, map_obs, levels[var], region, stip_obs, outline=False)
         ax.set_title(f'{obs}\nbox {box_stats(lat, lon, map_obs, stip_obs, box)[0]:.3g} {units[var]}/century',
-                     fontsize=10)
+                     fontsize=FS_LABEL)
         for j, model in enumerate(esms, start=1):
             lat_e, lon_e, trend, _ = obs_contrast_trend_map(var, year_suffix, model)
             assert np.allclose(lat_e, lat) and np.allclose(lon_e, lon), f'{var} {model}: grid differs from {obs}'
             r = pattern_corr(map_obs, trend, lat)
             ax = fig.add_subplot(gs[2 * i + j // 3, j % 3], projection=proj)
-            draw_map(ax, lat, lon, trend, levels[var], region)
-            ax.set_title(f'{display_model_name(model)} ensemble mean (n = {len(member_files(var, model))})\n'
+            draw_map(ax, lat, lon, trend, levels[var], region, outline=False)
+            ax.set_title(f'{display_model_name(model)} (n = {len(member_files(var, model))})\n'
                          f'r = {r:.2f}, box {box_stats(lat, lon, trend, no_stip, box)[0]:.3g} {units[var]}/century',
-                         fontsize=10)
+                         fontsize=FS_LABEL)
             print(f'{var} {model}: ensemble-mean r {r:.2f}', flush=True)
         ax = fig.add_subplot(gs[2 * i + 1, 2])
         ax.axis('off')
         cbar = fig.colorbar(m, cax=ax.inset_axes([0.05, 0.55, 0.9, 0.08]), orientation='horizontal', format='%g')
-        cbar.set_label(f'{var_names[var]} DJF − JJA trend ({units[var]}/century)', fontsize=10)
+        cbar.set_label(f'{var_names[var]} DJF − JJA trend ({units[var]}/century)', fontsize=FS_LABEL)
         ax.text(0.5, 0.3, f'ESMs: ensemble mean\nstippling ({obs} only): significant at {level}%',
-                transform=ax.transAxes, ha='center', va='top', fontsize=9)
+                transform=ax.transAxes, ha='center', va='top', fontsize=FS_TICK)
     return fig
 
 
@@ -373,17 +253,11 @@ if __name__ == '__main__':
             out_dir = os.path.join(pdf_root, f'results{year_suffix}{run_suffix}')
             os.makedirs(out_dir, exist_ok=True)
 
-            summary, levels = [], {}
-            for panel in panels:
-                fig, row, levels[panel[1]], trends = plot_drift(panel, year_suffix, run_suffix)
-                summary.append(row)
-                # trends per century in the data's units (K or Pa), month 1 = January
-                pd.DataFrame({'month': np.arange(1, 13), **trends}).to_csv(
-                    os.path.join(out_dir, f'seasonal_cycle_drift_{obs}_{panel[1]}_monthly_trends.csv'), index=False)
-                out_fig = os.path.join(out_dir, f'seasonal_cycle_drift_{obs}_{panel[1]}.pdf')
-                fig.savefig(out_fig, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-                print(f'Saved: {out_fig}', flush=True)
+            fig, summary, levels = plot_obs(year_suffix)
+            out_fig = os.path.join(out_dir, f'seasonal_cycle_drift_{obs}.pdf')
+            fig.savefig(out_fig, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            print(f'Saved: {out_fig}', flush=True)
             pd.DataFrame(summary).to_csv(os.path.join(out_dir, f'seasonal_cycle_drift_{obs}_summary.csv'),
                                          index=False)
 

@@ -1,8 +1,7 @@
 """R2-M2 (ii): plot the trend maps written by compute_trend_maps.py.
 
 Rows = datasets (4 ESMs + 20CRv3), columns = truth then each method's member-mean trend. One shared
-symmetric colorbar per figure. ESM estimate panels show the pooled uncentered correlation r and normalised
-RMSE over all members (the 'total' of the Taylor diagrams).
+symmetric colorbar per figure.
 Run: PBDMDC_LAGS=3 PBDMDC_YEAR_RANGES=1850-2014 PBDMDC_TREND_WINDOW=1985-2014 python -m evaluation.plot_trend_maps
 """
 import os
@@ -10,12 +9,15 @@ import os
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name, p95_abs
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name, p95_abs, set_font_sizes
 from evaluation.utils.trends import trend_window, window_label
 from utils.params import (pdf_root, requested_lags, requested_year_ranges, requested_clim_vars,
                           run_suffixes, results_dir)
+
+# Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.4 in wide).
+FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 16, 18
+set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 obs = '20CRv3'
 units = {'tas_ocean': 'K', 'tas': 'K', 'psl': 'hPa'}
@@ -28,7 +30,7 @@ def lat_extent(maps, lat):
     return [max(-90., 5 * np.floor(lat[data_rows].min() / 5)), min(90., 5 * np.ceil(lat[data_rows].max() / 5))]
 
 
-def plot_trend_figure(npz, metrics, var, wlabel):
+def plot_trend_figure(npz, var, wlabel):
     methods = list(npz['methods'])
     datasets = list(npz['datasets'])
     panels = {(d, c): npz[f'{d}__truth' if c == 'truth' else f'{d}__{c}__mean']
@@ -58,23 +60,17 @@ def plot_trend_figure(npz, metrics, var, wlabel):
             ax.coastlines(linewidth=0.5)
             if i == 0:
                 ax.set_title('Truth (ESM ensemble mean)' if c == 'truth' else METHOD_NAMES_ON_FIG.get(c, c),
-                             fontsize=11)
+                             fontsize=FS_TITLE)
             if j == 0:
                 ax.text(-0.04, 0.5, display_model_name(d), transform=ax.transAxes, rotation=90, ha='right',
-                        va='center', fontsize=10)
+                        va='center', fontsize=FS_LABEL)
                 if d == obs:  # the reanalysis is not a forced response
-                    ax.text(0.02, 0.04, 'raw (forced + internal)', transform=ax.transAxes, fontsize=8,
+                    ax.text(0.02, 0.04, 'raw (forced + internal)', transform=ax.transAxes, fontsize=FS_TICK,
                             bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1.5))
-            if c != 'truth' and d != obs:
-                (pooled,) = metrics[(metrics.model == d) & (metrics.method == c)
-                                    & (metrics.member == 'pooled')].itertuples()
-                ax.text(0.02, 0.04, f'r={pooled.corr:.2f}  nRMSE={pooled.rmse:.2f}',
-                        transform=ax.transAxes, fontsize=8,
-                        bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1.5))
 
     fmt = '%.2f' if scale < 1 else '%.1f'
     cbar = fig.colorbar(mappable, ax=axes, orientation='horizontal', fraction=0.04, pad=0.03, aspect=50, format=fmt)
-    cbar.set_label(f'{CLIM_VARS_ON_FIG[var]} trend {wlabel} ({units[var]}/decade)', fontsize=11)
+    cbar.set_label(f'{CLIM_VARS_ON_FIG[var]} trend {wlabel} ({units[var]}/decade)', fontsize=FS_LABEL)
     return fig
 
 
@@ -89,8 +85,7 @@ if __name__ == '__main__':
 
             for var in requested_clim_vars(['tas_ocean', 'psl', 'tas']):
                 npz = dict(np.load(os.path.join(in_dir, f'trend_maps_{wlabel}_{var}.npz')))
-                metrics = pd.read_csv(os.path.join(in_dir, f'trend_maps_{wlabel}_{var}_metrics.csv'))
-                fig = plot_trend_figure(npz, metrics, var, wlabel)
+                fig = plot_trend_figure(npz, var, wlabel)
                 out_fig = os.path.join(pdf_results_dir, f'trend_maps_{wlabel}_{var}.pdf')
                 fig.savefig(out_fig, dpi=300, bbox_inches='tight')
                 plt.close(fig)
