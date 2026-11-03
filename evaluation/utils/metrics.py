@@ -248,7 +248,7 @@ def compute_taylor_axis_extent(td_lists, padding=0.03, percentage=98):
         (max(0.0, y_min - padding * y_span), y_max + padding * y_span),
     )
 
-def add_one_custom_plot(td_list, fig, subplot=None, legend=True, percentage=95, std_range=None, legend_kwargs=None, axis_extent=None, ax=None, corr_label_pad=0.0, corr_label_fontsize=10.0):
+def add_one_custom_plot(td_list, fig, subplot=None, legend=True, percentage=95, std_range=None, legend_kwargs=None, axis_extent=None, ax=None, corr_label_pad=0.0, corr_label_fontsize=10.0, corr_labels=None):
     ref_point=td_list[0]['std_X']
 
     if std_range is None:
@@ -264,6 +264,7 @@ def add_one_custom_plot(td_list, fig, subplot=None, legend=True, percentage=95, 
         std_range=std_range,
         corr_label_pad=corr_label_pad,
         corr_label_fontsize=corr_label_fontsize,
+        corr_labels=corr_labels,
     )
     taylor_fig.add_reference_point(ref_point,color="black",marker=".",markersize=20,linestyle="",label="Reference Data")
     taylor_fig.add_reference_line(ref_point, color="black", linestyle="--", label="_")
