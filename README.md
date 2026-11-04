@@ -88,7 +88,7 @@ See `downloads/README.md` for details and expected output layout.
 
 The retained figure generation path is:
 
-1. Prepare data and EOF artifacts:
+1. Prepare data and EOF artifacts (`interpolate_full_forcing` writes `interpolatedAllForcing.csv`, the linearly interpolated AR6 ERF used as forcing by every method):
 ```bash
 python -m data_preparation.interpolate_full_forcing
 python -m data_preparation.compute_means

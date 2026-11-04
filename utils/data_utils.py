@@ -7,16 +7,19 @@ import pickle
 import pandas as pd
 
 
+# All forcings come from interpolatedAllForcing.csv (data_preparation/interpolate_full_forcing.py: AR6 annual ERF,
+# linearly interpolated to monthly with each annual value at mid-year), so every method sees the same interpolation.
+# LR and PullbackDMDc use its 'total' column; the -2d/-3d variants use component columns.
 def load_forcings(mean_center: bool = True, rescale: bool = False, start_year: int = 1850, end_year: int = 2014):
     # Load Forcings
-    forcings_df = pd.read_csv('interpolatedTotalForcing.csv')
+    forcings_df = pd.read_csv('interpolatedAllForcing.csv')
 
     forcings_df['time'] = pd.to_datetime(forcings_df['time']) 
 
     start = pd.Timestamp(f'{start_year}-01-01')
     end = pd.Timestamp(f'{end_year}-12-31')
     forcings_df = forcings_df[(forcings_df['time'] >= start) & (forcings_df['time'] <= end)].reset_index(drop=True)
-    forcings  = np.array(forcings_df['total_forcing'])
+    forcings  = np.array(forcings_df['total'])
 
     if rescale and mean_center:
         forcings  = (forcings-np.mean(forcings))/np.std(forcings)
@@ -28,19 +31,19 @@ def load_forcings(mean_center: bool = True, rescale: bool = False, start_year: i
     return forcings
 
 def load_forcings_pullback(transition_time=1200, start_year: int = 1850, end_year: int = 2014):
-    forcings_df = pd.read_csv('interpolatedTotalForcing.csv')
+    forcings_df = pd.read_csv('interpolatedAllForcing.csv')
 
     forcings_df['time'] = pd.to_datetime(forcings_df['time']) 
     # Clip to Jan 1850 - Dec 2014
     start = pd.Timestamp(f'{start_year}-01-01')
     end = pd.Timestamp(f'{end_year}-12-31')
     short_forcings_df = forcings_df[(forcings_df['time'] >= start) & (forcings_df['time'] <= end)].reset_index(drop=True)
-    short_forcings = np.array(short_forcings_df['total_forcing'])
+    short_forcings = np.array(short_forcings_df['total'])
     
     start = start - pd.DateOffset(months=transition_time)
     end = pd.Timestamp(f'{end_year}-12-31')
     long_forcings_df = forcings_df[(forcings_df['time'] >= start) & (forcings_df['time'] <= end)].reset_index(drop=True)
-    long_forcings = np.array(long_forcings_df['total_forcing'])
+    long_forcings = np.array(long_forcings_df['total'])
 
     mean_short = np.mean(short_forcings)
     std_short = np.std(short_forcings)

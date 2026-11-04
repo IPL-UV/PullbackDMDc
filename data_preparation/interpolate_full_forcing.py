@@ -1,3 +1,5 @@
+"""Interpolate the AR6 annual ERF table to monthly (linear, annual values at mid-year) -> interpolatedAllForcing.csv.
+This is the forcing for every method: LR and PullbackDMDc use its total column, the -2d/-3d variants its components."""
 import pandas as pd
 import numpy as np
 
