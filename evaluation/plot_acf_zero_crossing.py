@@ -6,54 +6,12 @@ import numpy as np
 
 from evaluation.utils.members import SELECTED_HANDLE, acf_selected_index, mark_selected
 from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, MODEL_DISPLAY_NAMES, TIMESCALE_BANDS, set_font_sizes
-from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+from evaluation.utils.timescales import zero_crossing_summary
+from utils.params import artifact_root, esms, lag_suffix_for, method_markers, pdf_root, predictions_dir, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.9 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
 set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
-
-
-def build_suffixes(lag, start_year, end_year):
-    if lag == 3:
-        lag_suffix = ''
-    elif lag == 12:
-        lag_suffix = '_lag12'
-    else:
-        raise ValueError(f'Unsupported lag: {lag}')
-
-    if (start_year, end_year) == (1950, 2014):
-        year_suffix = '_tier1'
-    elif (start_year, end_year) == (1850, 2014):
-        year_suffix = ''
-    else:
-        raise ValueError(f'Unsupported year range: {(start_year, end_year)}')
-
-    return lag_suffix, year_suffix
-
-
-def first_zero_crossing_time(acf_values, dt_years):
-    for idx in range(1, len(acf_values)):
-        if acf_values[idx] <= 0.0:
-            prev_idx = idx - 1
-            prev_value = acf_values[prev_idx]
-            next_value = acf_values[idx]
-            if np.isclose(prev_value, next_value):
-                return idx * dt_years
-            weight = (0.0 - prev_value) / (next_value - prev_value)
-            weight = np.clip(weight, 0.0, 1.0)
-            return (prev_idx + weight) * dt_years
-    return np.nan
-
-
-def compute_member_mode_timescales(member_acfs, top_n, dt_years):
-    member_timescales = []
-    for member_acf in member_acfs:
-        mode_timescales = []
-        for mode_idx in range(top_n):
-            crossing_years = first_zero_crossing_time(member_acf[mode_idx], dt_years)
-            mode_timescales.append(4.0 * crossing_years if np.isfinite(crossing_years) else np.nan)
-        member_timescales.append(mode_timescales)
-    return np.asarray(member_timescales, dtype=float)
 
 
 def load_timescale_summaries(clim_vars, results_dir, top_n, dt_years, base_pred_dir):
@@ -78,11 +36,11 @@ def load_timescale_summaries(clim_vars, results_dir, top_n, dt_years, base_pred_
         selected_by_model = {}
         for model_name in esms:
             model_member_acfs = acf_data.get(model_name, [])
-            summary_by_model[model_name] = compute_member_mode_timescales(
+            summary_by_model[model_name] = np.asarray(zero_crossing_summary(
                 member_acfs=model_member_acfs,
                 top_n=top_n,
                 dt_years=dt_years,
-            )
+            ), dtype=float)
             if model_member_acfs:
                 selected_by_model[model_name] = acf_selected_index(
                     os.path.join(base_pred_dir, clim_var, model_name), chosen_method, model_name,
@@ -199,7 +157,7 @@ def main():
     lag = 3
     start_year, end_year = 1850, 2014
 
-    lag_suffix, year_suffix = build_suffixes(lag=lag, start_year=start_year, end_year=end_year)
+    lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
     # Requested order: row 1 = tas (SAT), row 2 = psl (SLP)
     clim_vars = ['tas', 'psl']

@@ -13,41 +13,15 @@ from utils.data_utils import undo_lat_scaling
 from utils.params import pdf_root, predictions_dir
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
-from evaluation.utils.members import SELECTED_MEMBERS
+from evaluation.utils.members import SELECTED_MEMBERS, member_id
+from evaluation.utils.timescales import eig_decay_time_years, eig_frequency_per_year
 from evaluation.utils.style import display_model_name, set_font_sizes
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~9.7 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 11, 12, 14, 15
 set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
-# Helper functions from eigs_vis.py
-def compute_yearly_decay_time(lambdas, tau):
-    return -tau / (12 * np.log(np.abs(lambdas)))
-
-def compute_yearly_frequency(lambdas, tau):
-    #omegas = np.imag(np.log(lambdas / np.abs(lambdas))) / tau
-    #return (6 * np.abs(omegas)) / np.pi
-    omegas = np.angle(lambdas) / tau
-    return (6 * np.abs(omegas)) / np.pi
-
 # Fallback parsers if not already defined in a previous cell
-def parse_ensemble_member_from_filename(f_name, esm_name):
-    # Match common CMIP-style member IDs first (e.g., r47i1p1f1)
-    m = re.search(r'r\d+i\d+p\d+f\d+', f_name)
-    if m:
-        return m.group(0)
-
-    # CESM2 can encode member as decimal + i/p/f block (e.g., 1281.005i1p1f1)
-    m = re.search(r'\d+\.\d+i\d+p\d+f\d+', f_name)
-    if m:
-        return m.group(0)
-
-    # Legacy fallbacks
-    if esm_name == 'CESM2':
-        return f_name.split('.')[0].split('_')[-1] + '.' + f_name.split('.')[1].split('_')[0]
-    parts = f_name.split('_')
-    return parts[5] if len(parts) > 5 else (parts[4] if len(parts) > 4 else 'unknown')
-
 def parse_ensemble_member_from_eof_filename(f_name, esm_name):
     m = re.search(r'r\d+i\d+p\d+f\d+', f_name)
     if m:
@@ -100,11 +74,11 @@ if __name__ == "__main__":
 
                 dmd.compute_modes()
                 eigs=dmd.eigvals
-                decay_times = compute_yearly_decay_time(eigs, dmd.lag)
-                yearly_frequency = compute_yearly_frequency(eigs, dmd.lag)
+                decay_times = eig_decay_time_years(eigs, dmd.lag)
+                yearly_frequency = eig_frequency_per_year(eigs, dmd.lag)
 
 
-                ens_member = parse_ensemble_member_from_filename(f_name, esm)
+                ens_member = member_id(f_name)
                 for i in range(eigs.shape[0]):
                     eig = eigs[i]
                     row = pd.DataFrame({

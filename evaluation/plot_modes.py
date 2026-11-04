@@ -9,9 +9,10 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker
 from utils.data_utils import undo_lat_scaling
-from evaluation.utils.members import SELECTED_MEMBERS
+from evaluation.utils.members import SELECTED_MEMBERS, member_id
 from evaluation.utils.style import TIMESCALE_BANDS, p95_abs, set_font_sizes
-from utils.params import artifact_root, pdf_root, predictions_dir
+from evaluation.utils.timescales import acf, acf_bands, eig_decay_time_years, eig_frequency_per_year, zero_crossing_time
+from utils.params import artifact_root, lag_suffix_for, pdf_root, predictions_dir, year_suffix_for
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.gridspec as gridspec
 
@@ -29,19 +30,7 @@ def inner_yticks(ax, nbins=4, margin=0.08):
 # Parameters for selection
 lag=3
 start_year, end_year = 1850, 2014
-if lag == 3:
-    lag_suffix = ''
-elif lag == 12:
-    lag_suffix = '_lag12'
-else:
-    print('lag not recognized')
-
-if (start_year, end_year) == (1950, 2014):
-    year_suffix = '_tier1'
-elif (start_year, end_year) == (1850, 2014):
-    year_suffix = ''
-else:
-    print('year range not recognized')
+lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
 clim_vars = ['tas', 'tas_ocean', 'psl']
 
@@ -67,53 +56,6 @@ map_cmap = 'RdBu_r'
 internal_smooth_sigma = 12 * 8 # eight years
 #acf_length = [100 * 12] * 2 + [20*12] * (top_n-2)
 
-def compute_yearly_decay_time(lambdas, tau):
-    return -tau / (12 * np.log(np.abs(lambdas)))
-
-def compute_yearly_frequency(lambdas, tau):
-    omegas = np.angle(lambdas) / tau
-    return (6 * np.abs(omegas)) / np.pi
-
-def parse_ensemble_member_from_filename(f_name, esm_name):
-    if esm_name == '20CRv3': return ''
-    return f_name.split('_')[-4]
-
-def acf(x, axis=0, length=60):
-    x = x - x.mean(axis=axis, keepdims=True)
-    N = x.shape[axis]
-    def acf_1d(z):
-        gamma0 = np.sum(z * z) / N
-        gamma0 = gamma0 if gamma0 > 1e-12 else 1e-12
-        return np.array([(np.sum(z[:N-k] * z[k:]) / (N - k)) / gamma0 for k in range(length)])
-    return np.apply_along_axis(acf_1d, axis, x)
-
-def acf_bands(acf_values, N, alpha=0.05):
-    # White-noise null: CI at lag k is +/- z_score / sqrt(N-k).
-    z_score = 1.96 # 95% rejection of white noise hypothesis
-    # z_score = 2.576 # 99% rejection of white noise hypothesis
-    acf_values = np.asarray(acf_values, dtype=float).reshape(-1)
-    se = np.zeros_like(acf_values, dtype=float)
-    max_lag = min(acf_values.size, N)
-    for k in range(max_lag):
-        se[k] = 1.0 / np.sqrt(N - k)
-    band = z_score * se
-    return -band, band
-
-
-def first_zero_crossing_time(acf_time, acf_values):
-    for idx in range(1, len(acf_values)):
-        if acf_values[idx] <= 0.0:
-            prev_idx = idx - 1
-            prev_value = acf_values[prev_idx]
-            next_value = acf_values[idx]
-            if np.isclose(prev_value, next_value):
-                return float(acf_time[idx])
-            weight = (0.0 - prev_value) / (next_value - prev_value)
-            weight = np.clip(weight, 0.0, 1.0)
-            return float(acf_time[prev_idx] + weight * (acf_time[idx] - acf_time[prev_idx]))
-    return np.nan
-
-
 def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
     """Load the DMD fit for one dataset and compute the top-mode maps, time series and ACFs."""
     # --------------------------------------------------
@@ -129,7 +71,7 @@ def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
         method = f_name.split('_')[-1].split('.')[0]
         if method != chosen_method:
             continue
-        if parse_ensemble_member_from_filename(f_name, chosen_model) == chosen_member:
+        if member_id(f_name) == chosen_member:
             matched_dmd_file = os.path.join(model_dir, f_name)
             eof_file = os.path.join(eof_dir, f_name.replace('_' + chosen_method, ''))
             break
@@ -169,8 +111,8 @@ def load_mode_rows(clim_var, chosen_model, chosen_member, chosen_method):
     forced_fraction = np.var(ts_fr, axis=0) / np.var(ts_fr + ts_iv, axis=0)
     nrows = min(top_n, eigvals.size)
 
-    decay_times = compute_yearly_decay_time(eigvals, dmd.lag)
-    frequencies = compute_yearly_frequency(eigvals, dmd.lag)
+    decay_times = eig_decay_time_years(eigvals, dmd.lag)
+    frequencies = eig_frequency_per_year(eigvals, dmd.lag)
 
     # First pass: compute all data
     modes_data = []
@@ -380,7 +322,7 @@ def plot_mode_figure(clim_var, chosen_model, d, scale):
         )
         ax_acf.plot(acf_time_plot, ts_acf_plot, '-', color='black', lw=.1)
 
-        zero_crossing_t = first_zero_crossing_time(acf_time_plot, ts_acf_plot)
+        zero_crossing_t = zero_crossing_time(ts_acf_plot, acf_time_plot[1] - acf_time_plot[0])
         if np.isfinite(zero_crossing_t):
             ax_acf.scatter(
                 zero_crossing_t,

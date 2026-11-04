@@ -5,26 +5,12 @@ import matplotlib.pyplot as plt
 
 from evaluation.utils.members import SELECTED_HANDLE, mark_selected, selected_index
 from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
-from utils.params import esms, colors, method_markers, pdf_root, predictions_dir
+from evaluation.utils.timescales import eig_decay_time_years, eig_frequency_per_year
+from utils.params import esms, colors, lag_suffix_for, method_markers, pdf_root, predictions_dir, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.9 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
 set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
-
-
-def compute_yearly_decay_time(lambdas, tau):
-    return -tau / (12 * np.log(np.abs(lambdas)))
-
-
-def compute_yearly_frequency(lambdas, tau):
-    omegas = np.angle(lambdas) / tau
-    return (6 * np.abs(omegas)) / np.pi
-
-
-def parse_ensemble_member_from_filename(f_name, esm_name):
-    if esm_name == '20CRv3':
-        return ''
-    return f_name.split('_')[-4]
 
 
 def remove_outliers_iqr(values, iqr_multiplier=1.5):
@@ -90,8 +76,8 @@ def load_eig_data(clim_var, methods, top_n, base_pred_dir):
             order = np.argsort(np.abs(eigs))[::-1]
             eigs = eigs[order]
 
-            decay_times = np.real(compute_yearly_decay_time(eigs, dmd.lag))
-            frequencies = np.real(compute_yearly_frequency(eigs, dmd.lag))
+            decay_times = np.real(eig_decay_time_years(eigs, dmd.lag))
+            frequencies = np.real(eig_frequency_per_year(eigs, dmd.lag))
 
             data[model][method]['decay'].append(decay_times)
             data[model][method]['freq'].append(frequencies)
@@ -208,19 +194,7 @@ if __name__ == '__main__':
     lag = 3
     start_year, end_year = 1850, 2014
 
-    if lag == 3:
-        lag_suffix = ''
-    elif lag == 12:
-        lag_suffix = '_lag12'
-    else:
-        raise ValueError(f'Unsupported lag: {lag}')
-
-    if (start_year, end_year) == (1950, 2014):
-        year_suffix = '_tier1'
-    elif (start_year, end_year) == (1850, 2014):
-        year_suffix = ''
-    else:
-        raise ValueError(f'Unsupported year range: {(start_year, end_year)}')
+    lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
     clim_vars = ['tas', 'psl', 'tas_ocean']
     methods = ['LIM', 'PullbackDMDc', 'PullbackDMDc-2d', 'PullbackDMDc-3d']

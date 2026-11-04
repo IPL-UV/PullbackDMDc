@@ -7,6 +7,7 @@ from evaluation.utils.metrics import smooth_truth
 from evaluation.utils.taylor_diagram import Ensemble_PCA_TD_Estimator
 from utils.data_utils import load_truncated_prediction, load_truth
 from utils.params import artifact_root, method_names, esms, year_ranges, lags, requested_lags, requested_year_ranges, predictions_dir
+from utils.params import lag_suffix_for, year_suffix_for
 from utils.params import method_names, esms, year_ranges, lags
 
 if __name__ == '__main__':
@@ -18,17 +19,7 @@ if __name__ == '__main__':
     for lag in requested_lags(lags):
         for start_year, end_year in requested_year_ranges(year_ranges):
 
-            if lag == 3:
-                lag_suffix = ''
-            else:
-                lag_suffix = f'_lag{lag}'
-
-            if (start_year, end_year) == (1950, 2014):
-                year_suffix = '_tier1'
-            elif (start_year, end_year) == (1850, 2014):
-                year_suffix = ''
-            else:
-                print('year range not recognized')
+            lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
             base_pred_dir = predictions_dir(year_suffix, lag_suffix)
             base_truth_dir = os.path.join(artifact_root, f'means{year_suffix}')

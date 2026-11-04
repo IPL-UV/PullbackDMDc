@@ -6,7 +6,8 @@ import numpy as np
 
 from evaluation.utils.style import (CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, METHOD_NAMES_ON_FIG,
                                    display_model_name, set_font_sizes)
-from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+from evaluation.utils.timescales import acf_bands, eig_decay_time_years
+from utils.params import artifact_root, esms, lag_suffix_for, method_markers, pdf_root, predictions_dir, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~15.5 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 17, 20, 22, 24
@@ -15,28 +16,6 @@ set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
 def display_method_name(method_name):
 	return METHOD_NAMES_ON_FIG.get(method_name, method_name)
-
-
-def compute_yearly_decay_time(lambdas, tau):
-	return -tau / (12.0 * np.log(np.abs(lambdas)))
-
-
-def build_suffixes(lag, start_year, end_year):
-	if lag == 3:
-		lag_suffix = ""
-	elif lag == 12:
-		lag_suffix = "_lag12"
-	else:
-		raise ValueError(f"Unsupported lag: {lag}")
-
-	if (start_year, end_year) == (1850, 2014):
-		year_suffix = ""
-	elif (start_year, end_year) == (1950, 2014):
-		year_suffix = "_tier1"
-	else:
-		raise ValueError(f"Unsupported year range: {(start_year, end_year)}")
-
-	return lag_suffix, year_suffix
 
 
 def method_for_variable(clim_var):
@@ -78,7 +57,7 @@ def load_decay_member_vectors(clim_var, model, method, base_pred_dir):
 		order = np.argsort(np.abs(eigvals))[::-1]
 		eigvals = eigvals[order]
 
-		decay = np.real(compute_yearly_decay_time(eigvals, dmd.lag))
+		decay = np.real(eig_decay_time_years(eigvals, dmd.lag))
 		# Keep only finite, positive decay times.
 		decay = np.where(np.isfinite(decay) & (decay > 0.0), decay, np.nan)
 		if np.all(np.isnan(decay)):
@@ -121,18 +100,6 @@ def summarize_by_model(member_vectors, n_modes):
 
 
 
-def acf_bands(acf_values, sample_size, alpha=0.05):
-	# White-noise null: CI at lag k is +/- z_score / sqrt(N-k).
-	z_score = 1.96
-	acf_values = np.asarray(acf_values, dtype=float).reshape(-1)
-	se = np.zeros_like(acf_values, dtype=float)
-	max_lag = min(acf_values.size, sample_size)
-	for lag_idx in range(max_lag):
-		se[lag_idx] = 1.0 / np.sqrt(sample_size - lag_idx)
-	band = z_score * se
-	return -band, band
-
-
 def compute_member_mode_ci_coverage(member_acfs, top_n, sample_size, years_window):
 	member_coverage = []
 	max_lag_count = int(years_window * 12) + 1  # include lag-0
@@ -145,7 +112,7 @@ def compute_member_mode_ci_coverage(member_acfs, top_n, sample_size, years_windo
 				mode_coverage.append(np.nan)
 				continue
 
-			acf_lower, acf_upper = acf_bands(acf_values, sample_size=sample_size, alpha=0.05)
+			acf_lower, acf_upper = acf_bands(acf_values, sample_size, alpha=0.05)
 			# Exclude lag-0 (always 1 by construction) to focus on internal variability noise structure.
 			inside = (acf_values[1:] >= acf_lower[1:]) & (acf_values[1:] <= acf_upper[1:])
 			mode_coverage.append(100.0 * np.mean(inside))
@@ -322,7 +289,7 @@ def main():
 	start_year, end_year = 1850, 2014
 	acf_stat_years = 40
 
-	lag_suffix, year_suffix = build_suffixes(lag, start_year, end_year)
+	lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 	clim_vars = ["tas_ocean"]
 	sample_size = (end_year - start_year + 1) * 12 - lag
 	if sample_size <= 1:

@@ -5,25 +5,9 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy.stats import pearsonr
 import pandas as pd
-from evaluation.utils.taylor_diagram_plot import TaylorDiagramPlot
+from evaluation.utils.taylor_diagram_plot import TaylorDiagramPlot, _filter_inlier_coords
 import cftime
 # from evaluation.taylor import TaylorDiagram
-
-
-def _filter_inlier_coords(coords, fence_scale=1.5):
-    if coords.shape[0] < 4:
-        return coords
-
-    q1 = np.percentile(coords, 25.0, axis=0)
-    q3 = np.percentile(coords, 75.0, axis=0)
-    iqr = q3 - q1
-    lower = q1 - fence_scale * iqr
-    upper = q3 + fence_scale * iqr
-    mask = np.all((coords >= lower) & (coords <= upper), axis=1)
-
-    if np.count_nonzero(mask) >= 3:
-        return coords[mask]
-    return coords
 
 
 def spatial_rmse(preds, truth):
@@ -115,11 +99,6 @@ def trend_map(x):
         output_dtypes=[float],
     )
 
-def global_mean(data,lats):
-    # area weighting coefficients
-    sq=np.cos(np.pi*lats[:,None]/180.)
-    return (data*sq).mean(axis=(-1,-2))/((data*0+1.)*sq).mean(axis=(-1,-2))
-
 def custom_masked_array(da):
     masked_array=da.to_masked_array()
     #update mask to exclude nans and big numbers for sure
@@ -131,7 +110,6 @@ def global_mean(x, lats):
     """Global mean timeseries (mean over space)."""
 
     if isinstance(x, xr.DataArray):
-        print('hi')
         x=x.to_masked_array()
     sq=np.cos(np.pi*lats[:,None]/180.)
     x=x/np.sqrt(sq) # Scale to original units, then compute weighted mean by definition

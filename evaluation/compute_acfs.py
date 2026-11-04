@@ -4,25 +4,13 @@ import matplotlib.pyplot as plt
 import pickle
 import cartopy.crs as ccrs
 from utils.data_utils import undo_lat_scaling
-from utils.params import artifact_root, esms, predictions_dir
+from evaluation.utils.timescales import acf
+from utils.params import artifact_root, esms, lag_suffix_for, predictions_dir, year_suffix_for
 
 # Parameters for selection
 lag = 3
 start_year, end_year = 1850, 2014
-
-if lag == 3:
-    lag_suffix = ''
-elif lag == 12:
-    lag_suffix = '_lag12'
-else:
-    print('lag not recognized')
-
-if (start_year, end_year) == (1950, 2014):
-    year_suffix = '_tier1'
-elif (start_year, end_year) == (1850, 2014):
-    year_suffix = ''
-else:
-    print('year range not recognized')
+lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
 clim_vars = ['tas_ocean', 'tas', 'psl']
 
@@ -41,16 +29,6 @@ length = 100 * 12
 #     'acfs':   list of shape (n_members, top_n, length),
 #     'titles': list of per-mode title strings (from first member)
 # }
-
-def acf(x, axis=0, length=60):
-    x = x - x.mean(axis=axis, keepdims=True)
-    N = x.shape[axis]
-    def acf_1d(z):
-        gamma0 = np.sum(z * z) / N
-        gamma0 = gamma0 if gamma0 > 1e-12 else 1e-12
-        return np.array([(np.sum(z[:N-k] * z[k:]) / (N - k)) / gamma0 for k in range(length)])
-    return np.apply_along_axis(acf_1d, axis, x)
-
 
 def main():
     for clim_var in clim_vars:

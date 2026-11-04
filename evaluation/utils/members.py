@@ -7,6 +7,8 @@ import warnings
 import numpy as np
 from matplotlib.lines import Line2D
 
+from evaluation.utils.timescales import acf
+
 # Single source for the member shown in plot_modes.py / plot_psd_mtm.py (20CRv3 has one realization).
 SELECTED_MEMBERS = {
     '20CRv3': '',
@@ -44,14 +46,6 @@ def selected_index(file_names, model):
     return hits[0]
 
 
-def _acf(x, length):
-    """Same ACF as compute_acfs.py (biased-by-lag normalisation)."""
-    x = x - x.mean()
-    n = x.size
-    gamma0 = max(np.sum(x * x) / n, 1e-12)
-    return np.array([(np.sum(x[:n - k] * x[k:]) / (n - k)) / gamma0 for k in range(length)])
-
-
 def acf_selected_index(model_dir, method, model, acf_rows, top_n, n_check=4):
     """Index of the selected member in an acfs_{var}_{method}.pkl member list.
 
@@ -72,7 +66,7 @@ def acf_selected_index(model_dir, method, model, acf_rows, top_n, n_check=4):
         ts = dmd.compute_rotated_modes(top_n=top_n)['internal_time_series']
     stored = np.asarray(acf_rows[idx])
     for k in range(min(n_check, ts.shape[1])):
-        if not np.allclose(_acf(ts[:, k], ACF_LENGTH), stored[k], atol=1e-10):
+        if not np.allclose(acf(ts[:, k], length=ACF_LENGTH), stored[k], atol=1e-10):
             raise ValueError(f'{model}: ACF row {idx} does not match {files[idx]} (mode {k + 1})')
     print(f'  {model}: selected member {files[idx]} = ACF row {idx} (checked)', flush=True)
     return idx

@@ -5,58 +5,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from evaluation.utils.style import ESM_COLORS, TIMESCALE_BANDS, display_model_name, set_font_sizes
-from utils.params import artifact_root, esms, method_markers, pdf_root, predictions_dir
+from evaluation.utils.timescales import zero_crossing_summary
+from utils.params import artifact_root, esms, lag_suffix_for, method_markers, pdf_root, predictions_dir, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~11.9 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 13, 15, 17, 19
 set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
-
-
-def first_zero_crossing_time(acf_values, dt):
-    for idx in range(1, len(acf_values)):
-        if acf_values[idx] <= 0.0:
-            prev_idx = idx - 1
-            prev_value = acf_values[prev_idx]
-            next_value = acf_values[idx]
-            if np.isclose(prev_value, next_value):
-                return idx * dt
-            weight = (0.0 - prev_value) / (next_value - prev_value)
-            weight = np.clip(weight, 0.0, 1.0)
-            return (prev_idx + weight) * dt
-    return np.nan
-
-
-def compute_zero_crossing_summary(member_acfs, top_n, dt_years):
-    summaries = []
-    for member_acf in member_acfs:
-        mode_vals = []
-        for mode_idx in range(top_n):
-            crossing = first_zero_crossing_time(member_acf[mode_idx], dt_years)
-            mode_vals.append(4.0 * crossing if np.isfinite(crossing) else np.nan)
-        summaries.append(np.asarray(mode_vals, dtype=float))
-    return summaries
-
-
-def build_suffixes(lag, start_year, end_year):
-    if lag == 3:
-        lag_suffix = ''
-    elif lag == 12:
-        lag_suffix = '_lag12'
-    elif lag == 6:
-        lag_suffix = '_lag6'
-    elif lag == 1:
-        lag_suffix = '_lag1'
-    else:
-        raise ValueError(f'Unsupported lag={lag}')
-
-    if (start_year, end_year) == (1850, 2014):
-        year_suffix = ''
-    elif (start_year, end_year) == (1950, 2014):
-        year_suffix = '_tier1'
-    else:
-        raise ValueError(f'Unsupported year range: {(start_year, end_year)}')
-
-    return lag_suffix, year_suffix
 
 
 def gather_forced_fraction(base_pred_dir, clim_var, chosen_method, top_n):
@@ -159,7 +113,7 @@ def main():
     lag = 3
     start_year, end_year = 1850, 2014
 
-    lag_suffix, year_suffix = build_suffixes(lag=lag, start_year=start_year, end_year=end_year)
+    lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
     clim_vars = ['tas_ocean']
     chosen_method = 'PullbackDMDc-3d'
@@ -184,7 +138,7 @@ def main():
         row1_timescales = {}
         for chosen_model in esms:
             member_acfs = acf_data.get(chosen_model, [])
-            row1_timescales[chosen_model] = compute_zero_crossing_summary(
+            row1_timescales[chosen_model] = zero_crossing_summary(
                 member_acfs=member_acfs,
                 top_n=top_n,
                 dt_years=dt_years,

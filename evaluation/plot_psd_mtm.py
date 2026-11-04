@@ -5,19 +5,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal.windows import dpss
 
-from evaluation.utils.members import SELECTED_MEMBERS
+from evaluation.utils.members import SELECTED_MEMBERS, member_id
 from evaluation.utils.style import CLIM_VARS_ON_FIG, ESM_COLORS, ESM_LINESTYLES, display_model_name, set_font_sizes
-from utils.params import esms, pdf_root, predictions_dir
+from utils.params import esms, lag_suffix_for, pdf_root, predictions_dir, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~17.9 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 20, 23, 25, 28
 set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
-
-def parse_ensemble_member_from_filename(f_name, esm_name):
-    if esm_name == '20CRv3':
-        return ''
-    return f_name.split('_')[-4]
 
 # ---------------------------------------------------------------
 # Multitaper PSD
@@ -80,8 +75,8 @@ def multitaper_psd(x, fs, NW=3, detrend='constant'):
 # ---------------------------------------------------------------
 lag = 3
 start_year, end_year = 1850, 2014
-lag_suffix  = '' if lag == 3 else '_lag12'
-year_suffix = '' if (start_year, end_year) == (1850, 2014) else '_tier1'
+lag_suffix  = lag_suffix_for(lag)
+year_suffix = year_suffix_for((start_year, end_year))
 
 clim_vars        = ['tas_ocean']
 chosen_method    = 'PullbackDMDc-3d'
@@ -132,7 +127,7 @@ def main():
             dmd_files = [
                 f_path
                 for f_path in dmd_files
-                if parse_ensemble_member_from_filename(os.path.basename(f_path), chosen_model) == selected_member
+                if member_id(os.path.basename(f_path)) == selected_member
             ]
 
             if not dmd_files:

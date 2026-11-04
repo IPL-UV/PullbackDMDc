@@ -7,7 +7,7 @@ import xarray as xr
 
 from utils.data_utils import undo_lat_scaling, load_forcings
 from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
-from utils.params import pdf_root, predictions_dir
+from utils.params import lag_suffix_for, pdf_root, predictions_dir, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at \textwidth (figure saves ~7.1 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 8, 9, 10, 11
@@ -26,19 +26,7 @@ if __name__ == '__main__':
     lag = 3
     start_year, end_year = 1850, 2014
 
-    if lag == 3:
-        lag_suffix = ''
-    elif lag == 12:
-        lag_suffix = '_lag12'
-    else:
-        print('lag not recognized')
-
-    if (start_year, end_year) == (1950, 2014):
-        year_suffix = '_tier1'
-    elif (start_year, end_year) == (1850, 2014):
-        year_suffix = ''
-    else:
-        print('year range not recognized')
+    lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
     clim_var = os.getenv('PBDMDC_CLIM_VAR', 'tas_ocean')  # 'psl', 'tas', 'tas_ocean'
 

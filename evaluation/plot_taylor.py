@@ -7,7 +7,7 @@ from evaluation.utils.metrics import add_one_custom_plot, compute_taylor_std_ran
 from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
 from evaluation.utils.trends import parse_window, window_label
 from utils.params import artifact_root, colors, method_names, esms, year_ranges, lags, method_markers, pdf_root, requested_lags, requested_year_ranges
-from utils.params import requested_clim_vars
+from utils.params import lag_suffix_for, requested_clim_vars, year_suffix_for
 
 # Prints at ~7/8/9/10 pt when included at 0.49 \textwidth (figure saves ~6.8 in wide).
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 16, 18, 19, 21
@@ -243,17 +243,7 @@ if __name__ == '__main__':
     for lag in requested_lags(lags):
         for start_year, end_year in requested_year_ranges(year_ranges):
  
-            if lag == 3:
-                lag_suffix = ''
-            else:
-                lag_suffix = f'_lag{lag}'
- 
-            if (start_year, end_year) == (1950, 2014):
-                year_suffix = '_tier1'
-            elif (start_year, end_year) == (1850, 2014):
-                year_suffix = ''
-            else:
-                print('year range not recognized')
+            lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
  
             artifact_results_dir = os.path.join(artifact_root, 'evaluation_results', f'results{year_suffix}{lag_suffix}')
             pdf_results_dir = os.path.join(pdf_root, f'results{year_suffix}{lag_suffix}')
