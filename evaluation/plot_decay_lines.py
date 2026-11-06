@@ -291,7 +291,7 @@ def main():
 
 	lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 	clim_vars = ["tas_ocean"]
-	sample_size = (end_year - start_year + 1) * 12 - lag
+	sample_size = (end_year - start_year + 1) * 12
 	if sample_size <= 1:
 		raise ValueError(f"Invalid sample size for ACF confidence bands: {sample_size}")
 
