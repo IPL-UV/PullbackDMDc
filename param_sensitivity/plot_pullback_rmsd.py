@@ -14,10 +14,8 @@ from utils.params import n_eofs, pdf_root, transition_time
 FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE = 8, 9, 10, 11
 set_font_sizes(FS_TICK, FS_LABEL, FS_TITLE, FS_SUPTITLE)
 
-SWEEPS = ['N', 'lag', 'domain', 'history']
-SWEEP_TITLE = {'N': 'Truncation', 'lag': 'Lag', 'domain': 'Domain (OSAT only)', 'history': 'Forcing history'}
-DOMAINS = ['main', '65S65N', '90S90N']
-DOMAIN_LABEL = {'main': '40S–65N', '65S65N': '65S–65N', '90S90N': '90S–90N'}
+SWEEPS = ['N', 'lag', 'history']
+SWEEP_TITLE = {'N': 'Truncation', 'lag': 'Lag', 'history': 'Forcing history'}
 # (var, label, colour, marker): Okabe-Ito colours, one marker per variable for grayscale.
 SERIES = [('tas', 'SAT', '#0072B2', 'o'),
           ('tas_ocean', 'OSAT', '#D55E00', 's'),
@@ -25,29 +23,24 @@ SERIES = [('tas', 'SAT', '#0072B2', 'o'),
 
 
 def load():
-    files = glob.glob(os.path.join(SENS_ROOT, 'results', 'main', '*.csv')) + \
-        glob.glob(os.path.join(SENS_ROOT, 'results', 'domain', '*.csv'))
+    files = glob.glob(os.path.join(SENS_ROOT, 'results', 'main', '*.csv'))
     df = pd.concat([pd.read_csv(f) for f in sorted(files)], ignore_index=True)
-    df = df[df.method == df['var'].map(METHOD)].copy()  # domain CSVs also hold the baselines
-    df['history'] = df.history.fillna(transition_time)  # older domain CSVs have no history column
+    df = df[df.method == df['var'].map(METHOD)].copy()
     df['hard_fail'] = (df.lead_abs >= 1) | df.nonfinite.fillna(False).astype(bool) | df.fit_error.notna()
     df['rmsd'] = df.td_rmse * 100  # Taylor distance to (1, 0), % of the truth std
     return df
 
 
 def is_main(df):
-    return ((df.domain == 'main') & (df.N == df['var'].map(n_eofs)) & (df.lag == 3)
-            & (df.history == transition_time))
+    return (df.N == df['var'].map(n_eofs)) & (df.lag == 3) & (df.history == transition_time)
 
 
 def sweeps(df):
     # Rows of each one-at-a-time sweep keyed by x; the main config belongs to every sweep.
-    main_n, main_h, main_d = df['var'].map(n_eofs), df.history == transition_time, df.domain == 'main'
-    return {'N': df[main_d & (df.lag == 3) & main_h].assign(x=lambda d: d.N / d['var'].map(n_eofs)),
-            'lag': df[main_d & (df.N == main_n) & main_h].assign(x=lambda d: d.lag),
-            'domain': df[((~main_d & main_h) | is_main(df)) & (df['var'] == 'tas_ocean')].assign(
-                x=lambda d: d.domain.map(DOMAINS.index)),
-            'history': df[main_d & (df.N == main_n) & (df.lag == 3)].assign(x=lambda d: d.history / 12)}
+    main_n, main_h = df['var'].map(n_eofs), df.history == transition_time
+    return {'N': df[(df.lag == 3) & main_h].assign(x=lambda d: d.N / d['var'].map(n_eofs)),
+            'lag': df[(df.N == main_n) & main_h].assign(x=lambda d: d.lag),
+            'history': df[(df.N == main_n) & (df.lag == 3)].assign(x=lambda d: d.history / 12)}
 
 
 def fixed_set(d):
@@ -77,12 +70,7 @@ def deltas(sw):
 
 
 def style_ax(ax, sweep):
-    if sweep == 'domain':
-        ax.set_xticks(range(len(DOMAINS)))
-        ax.set_xticklabels([DOMAIN_LABEL[d] for d in DOMAINS])
-        ax.set_xlim(-0.4, len(DOMAINS) - 0.6)
-        main = 0
-    elif sweep == 'history':
+    if sweep == 'history':
         ax.set_xscale('symlog', linthresh=1, linscale=0.5)  # 0 yr = cold start in 1850
         ticks = [0, 1, 2, 5, 10, 25, 50, 99]
         ax.set_xticks(ticks)
@@ -110,21 +98,17 @@ def style_ax(ax, sweep):
 
 
 def plot(dq, out_path):
-    fig, axes = plt.subplots(1, len(SWEEPS), figsize=(13, 3.6), sharey=True)
+    fig, axes = plt.subplots(1, len(SWEEPS), figsize=(10, 3.6), sharey=True)
     for k, (ax, sweep) in enumerate(zip(axes, SWEEPS)):
         for var, label, color, marker in SERIES:
             q = dq[(dq['var'] == var) & (dq.sweep == sweep)].sort_values('x')
             if q.empty:
                 continue
             label = f'{label}, {METHOD_NAMES_ON_FIG[METHOD[var]]}'
-            if sweep == 'domain':  # categories: points with IQR error bars
-                ax.errorbar(q.x, q.q50, yerr=[q.q50 - q.q25, q.q75 - q.q50], color=color, fmt=marker, ms=5,
-                            capsize=3, lw=1.2, label=label)
-            else:
-                ax.fill_between(q.x, q.q25, q.q75, color=color, alpha=0.15, lw=0)
-                ax.plot(q.x, q.q50, color=color, lw=2, marker=marker, ms=4, label=label)
+            ax.fill_between(q.x, q.q25, q.q75, color=color, alpha=0.15, lw=0)
+            ax.plot(q.x, q.q50, color=color, lw=2, marker=marker, ms=4, label=label)
         style_ax(ax, sweep)
-        ax.set_title(f'({"abcd"[k]}) {SWEEP_TITLE[sweep]}', loc='left')
+        ax.set_title(f'({"abc"[k]}) {SWEEP_TITLE[sweep]}', loc='left')
     axes[0].set_ylabel('ΔRMSD (percentage points\nof ground-truth std)')
     h, l = axes[0].get_legend_handles_labels()
     fig.legend(h, l, loc='lower center', ncol=len(l), fontsize=FS_LABEL, frameon=False, handlelength=3)

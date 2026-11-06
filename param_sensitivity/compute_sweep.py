@@ -65,7 +65,6 @@ def main():
     ap.add_argument('--eof-root', default=os.path.join(artifact_root, 'eofs'))
     ap.add_argument('--eof-root-large', default=os.path.join(SENS_ROOT, 'psl_n400', 'eofs'))
     ap.add_argument('--means-root', default=os.path.join(artifact_root, 'means'))
-    ap.add_argument('--domain', default='main')
     ap.add_argument('--n-jobs', type=int, default=8)
     ap.add_argument('--out', default='')
     args = ap.parse_args()
@@ -85,7 +84,7 @@ def main():
 
     files = sorted(f for f in os.listdir(os.path.join(args.eof_root, var, esm)) if f.endswith('.pkl')
                    and 'historical' in f and not ('CESM2' in f and 'cmip6' not in f))
-    print(f'{var} {esm} [{args.domain}]: {len(files)} members, {len(configs)} configs', flush=True)
+    print(f'{var} {esm}: {len(files)} members, {len(configs)} configs', flush=True)
 
     rows = []
     for large in (False, True):  # N above the stored EOF count comes from the larger store
@@ -97,7 +96,6 @@ def main():
             rows += [r for member_rows in Parallel(n_jobs=args.n_jobs)(jobs) for r in member_rows]
 
     df = pd.DataFrame(rows)
-    df.insert(0, 'domain', args.domain)
     df.insert(0, 'esm', esm)
     df.insert(0, 'var', var)
     out = args.out or os.path.join(SENS_ROOT, 'results', 'main', f'sweep_{var}_{esm}.csv')
