@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from evaluation.utils.members import SELECTED_HANDLE, mark_selected, selected_index
-from evaluation.utils.style import METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
+from evaluation.utils.style import CLIM_VARS_ON_FIG, METHOD_NAMES_ON_FIG, display_model_name, set_font_sizes
 from evaluation.utils.timescales import eig_decay_time_years, eig_frequency_per_year
 from utils.params import esms, colors, lag_suffix_for, method_markers, pdf_root, predictions_dir, year_suffix_for
 
@@ -86,102 +86,100 @@ def load_eig_data(clim_var, methods, top_n, base_pred_dir):
     return data
 
 
-def plot_combined_transposed(data, methods, model_order, top_n):
-    """Row 1=decay time, row 2=frequency; cols=modes; y-axis=models, x-axis=metric value."""
-    metrics = [
-        ('decay', 'Decay Time (years)', 'log'),
-        ('freq',  'Frequency (1/years)', None),
-    ]
-    n_rows = len(metrics)
-    n_cols = top_n
-    rng = np.random.default_rng(0)
+METRICS = [('decay', 'Decay time (yr)', 'log'), ('freq', 'Frequency (1/yr)', None)]
 
+
+def draw_panel(ax, data, metric_key, mode_idx, methods, model_order, rng):
+    """Scatter one metric of one mode: y = model (methods offset), x = metric value per member."""
     half = (len(methods) - 1) / 2.0
     method_offsets = {m: (i - half) * 0.18 for i, m in enumerate(methods)}
-
     positions = np.arange(len(model_order))
+
+    for method in methods:
+        offset = method_offsets[method]
+        x_vals, y_vals = [], []
+
+        for pos, model in zip(positions, model_order):
+            member_arrays = data[model][method][metric_key]
+            if not member_arrays:
+                continue
+            values = np.array([arr[mode_idx] for arr in member_arrays
+                               if len(arr) > mode_idx and np.isfinite(arr[mode_idx])])
+            # Use stronger filtering for frequency to suppress long tails.
+            iqr_multiplier = 1.5 if metric_key == 'decay' else 1.0
+            values = remove_outliers_iqr(values, iqr_multiplier=iqr_multiplier)
+            if values.size == 0:
+                continue
+            jitter = rng.uniform(-0.06, 0.06, size=values.size)
+            x_vals.append(values)
+            y_vals.append(np.full(values.size, pos + offset) + jitter)
+
+            # Member shown in the mode figures, if it survived the filters above.
+            sel = selected_index(data[model][method]['files'], model)
+            if sel is not None and len(member_arrays[sel]) > mode_idx:
+                sel_value = member_arrays[sel][mode_idx]
+                if np.isfinite(sel_value) and np.isin(sel_value, values):
+                    mark_selected(ax, sel_value, pos + offset, 0.07)
+
+        if x_vals:
+            ax.scatter(
+                np.concatenate(x_vals),
+                np.concatenate(y_vals),
+                marker=method_markers.get(method, 'o'),
+                color=colors.get(method, 'tab:gray'),
+                s=3,
+                alpha=0.75,
+                zorder=3,
+                label=method,
+            )
+
+    ax.set_yticks(positions)
+    ax.grid(True, axis='x', which='major', alpha=0.3)
+    ax.grid(True, axis='x', which='minor', alpha=0.15)
+
+
+def plot_all_vars(data_by_var, clim_vars, methods, model_order, top_n):
+    """Rows = modes; one column pair (decay, frequency) per variable, variables left to right."""
+    fig = plt.figure(figsize=(12.0, 2.1 * top_n), layout='constrained')
+    # First block carries the model tick labels, so give it extra width to keep panels equal.
+    subfigs = fig.subfigures(1, len(clim_vars), width_ratios=[1.3] + [1.0] * (len(clim_vars) - 1),
+                             wspace=0.02, squeeze=False)[0]
     tick_labels = [display_model_name(m) for m in model_order]
 
-    fig, axes = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(3.0 * n_cols, 2.8 * n_rows),
-        sharex='row',
-        sharey=True,
-        constrained_layout=True,
-        squeeze=False,
-    )
+    first_axes = None
+    for v_idx, (clim_var, subfig) in enumerate(zip(clim_vars, subfigs)):
+        axes = subfig.subplots(top_n, len(METRICS), sharex='col', sharey=True, squeeze=False)
+        rng = np.random.default_rng(0)
+        for col, (metric_key, x_label, xscale) in enumerate(METRICS):
+            for mode_idx in range(top_n):
+                ax = axes[mode_idx, col]
+                draw_panel(ax, data_by_var[clim_var], metric_key, mode_idx, methods, model_order, rng)
+                if xscale == 'log':
+                    ax.set_xscale('log')
+                if v_idx == 0 and col == 0:
+                    ax.set_yticklabels(tick_labels, fontsize=FS_TICK)
+                    ax.set_ylabel(f'Mode {mode_idx + 1}', fontsize=FS_LABEL)
+                else:
+                    ax.tick_params(axis='y', labelleft=False)
+            axes[-1, col].set_xlabel(x_label, fontsize=FS_LABEL)
+        subfig.suptitle(CLIM_VARS_ON_FIG.get(clim_var, clim_var), fontsize=FS_TITLE)
+        if first_axes is None:
+            first_axes = axes
 
-    for row_idx, (metric_key, row_label, xscale) in enumerate(metrics):
-        for mode_idx in range(top_n):
-            ax = axes[row_idx, mode_idx]
-
-            for method in methods:
-                offset = method_offsets[method]
-                x_vals, y_vals = [], []
-
-                for pos, model in zip(positions, model_order):
-                    member_arrays = data[model][method][metric_key]
-                    if not member_arrays:
-                        continue
-                    values = np.array([arr[mode_idx] for arr in member_arrays
-                                       if len(arr) > mode_idx and np.isfinite(arr[mode_idx])])
-                    # Use stronger filtering for frequency to suppress long tails.
-                    iqr_multiplier = 1.5 if metric_key == 'decay' else 1.0
-                    values = remove_outliers_iqr(values, iqr_multiplier=iqr_multiplier)
-                    if values.size == 0:
-                        continue
-                    jitter = rng.uniform(-0.06, 0.06, size=values.size)
-                    x_vals.append(values)
-                    y_vals.append(np.full(values.size, pos + offset) + jitter)
-
-                    # Member shown in the mode figures, if it survived the filters above.
-                    sel = selected_index(data[model][method]['files'], model)
-                    if sel is not None and len(member_arrays[sel]) > mode_idx:
-                        sel_value = member_arrays[sel][mode_idx]
-                        if np.isfinite(sel_value) and np.isin(sel_value, values):
-                            mark_selected(ax, sel_value, pos + offset, 0.07)
-
-                if x_vals:
-                    ax.scatter(
-                        np.concatenate(x_vals),
-                        np.concatenate(y_vals),
-                        marker=method_markers.get(method, 'o'),
-                        color=colors.get(method, 'tab:gray'),
-                        s=3,
-                        alpha=0.75,
-                        zorder=3,
-                        label=method,
-                    )
-
-            if xscale == 'log':
-                ax.set_xscale('log')
-
-            ax.set_yticks(positions)
-            ax.set_yticklabels(tick_labels, fontsize=FS_TICK)
-            ax.grid(True, axis='x', which='major', alpha=0.3)
-            ax.grid(True, axis='x', which='minor', alpha=0.15)
-
-            if row_idx == 0:
-                ax.set_title(f'Mode {mode_idx + 1}', fontsize=FS_TITLE)
-
-            if mode_idx == 0:
-                ax.set_ylabel(row_label, fontsize=FS_LABEL)
-
-    handles, labels = axes[0, 0].get_legend_handles_labels()
+    handles, labels = first_axes[0, 0].get_legend_handles_labels()
     seen = set()
     unique = [(h, l) for h, l in zip(handles, labels) if not (l in seen or seen.add(l))]
     fig.legend(
         [h for h, _ in unique] + [SELECTED_HANDLE],
         [METHOD_NAMES_ON_FIG.get(l, l) for _, l in unique] + [SELECTED_HANDLE.get_label()],
         title='Method',
-        loc='lower center',
+        loc='upper center',
         ncol=len(unique) + 1,
         frameon=True,
         facecolor=None,
         edgecolor='#9e9e9e',
         framealpha=1.0,
-        bbox_to_anchor=(0.5, -0.12),
+        bbox_to_anchor=(0.5, 0.0),
         markerscale=3,
         fontsize=FS_TICK,
         title_fontsize=FS_TICK,
@@ -196,7 +194,7 @@ if __name__ == '__main__':
 
     lag_suffix, year_suffix = lag_suffix_for(lag), year_suffix_for((start_year, end_year))
 
-    clim_vars = ['tas', 'psl', 'tas_ocean']
+    clim_vars = ['psl', 'tas', 'tas_ocean']  # left to right in the figure
     methods = ['LIM', 'PullbackDMDc', 'PullbackDMDc-2d', 'PullbackDMDc-3d']
     top_n = 4
 
@@ -212,16 +210,8 @@ if __name__ == '__main__':
     if not model_order:
         raise ValueError('No eigenvalue data found for the requested configuration.')
 
-    for clim_var in clim_vars:
-        clim_var = [clim_var]
-        clim_var_suffix = '_'.join(clim_var)
-        fig = plot_combined_transposed(
-            data=data_by_var[clim_var[0]],
-            methods=methods,
-            model_order=model_order,
-            top_n=top_n,
-        )
-        out_fig = os.path.join(results_dir, f'decay_frequency_top{top_n}_{clim_var_suffix}.pdf')
-        fig.savefig(out_fig, dpi=300, bbox_inches='tight')
-        plt.close(fig)
-        print(f'Saved: {out_fig}', flush=True)
+    fig = plot_all_vars(data_by_var, clim_vars, methods, model_order, top_n)
+    out_fig = os.path.join(results_dir, f'decay_frequency_top{top_n}_all.pdf')
+    fig.savefig(out_fig, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f'Saved: {out_fig}', flush=True)

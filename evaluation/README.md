@@ -31,7 +31,7 @@ One script per figure family, in two stages:
 | `plot_gm_20crv3` | models, means | `gm_20CRv3_forced.pdf`, `gm_20CRv3_forced_summary.csv` |
 | `plot_modes` | models, EOFs | `dmd_modes_{dataset}_{var}.pdf`, `forced_variance_ratio_{var}.csv` |
 | `plot_eigenvalue_scatter` | models | `eigenvalue_scatter_by_decay_rank_{var}.pdf` |
-| `plot_decay_frequency` | models | `decay_frequency_top{n}_{var}.pdf` |
+| `plot_decay_frequency` | models | `decay_frequency_top{n}_all.pdf` |
 | `plot_decay_lines` | models, `compute_acfs` | `decay_lines_all_modes_ci95_commonN{n}.pdf` |
 | `plot_psd_mtm` | models | `psd_mtm_{var}_{method}.pdf` |
 | `plot_B_vis_small` | models | `B_vis_small_{var}.pdf` |
