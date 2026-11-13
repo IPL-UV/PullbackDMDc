@@ -268,10 +268,11 @@ def plot_summary_figure(
             'title': f'Variance of Smoothed\nInternal Variability ({field_unit}$^2$)',
             'data': row2_smoothed_var,
             'selected': selected_sorted,
-            'xscale': 'log',  # all members are shown, spanning orders of magnitude
+            # Log for wide-spanning members; tas_ocean is shown linear and capped at 60.
+            'xscale': 'linear' if clim_var == 'tas_ocean' else 'log',
             'xlabel': rf'Var of smoothed $w\,\tilde{{z}}(t)$ [{field_unit}$^2$]',
             'valid': lambda x: np.isfinite(x) & (x > 0),
-            'xlim': None,
+            'xlim': (0.0, 60.0) if clim_var == 'tas_ocean' else None,
         },
         {
             'title': 'Fraction of Variance\nForced Timeseries',
